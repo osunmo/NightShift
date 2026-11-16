@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nightshift</title>
+<link rel="icon" href="data:," />
+<style>
+  :root {
+    --bg: #0e1116; --panel: #151a21; --panel2: #1b222b; --line: #29313c; --text: #e6e9ee; --muted: #8b95a3;
+    --accent: #8ab4ff; --orch: #b69cff; --coder: #6fb3ff; --qa: #5fd39a; --debugger: #ffad5c; --user: #c9ced6;
+    --ok: #4cc38a; --bad: #ff6b6b; --warn: #f0b84a; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  a { color: var(--accent); }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  .pill { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 2px 9px; }
+  .pill.demo { color: var(--warn); border-color: #5a4a22; }
+  .layout { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 47px); }
+  aside { border-right: 1px solid var(--line); overflow: auto; padding: 14px; }
+  main { overflow: hidden; display: flex; flex-direction: column; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  input, textarea, select { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font: inherit; }
+  textarea { resize: vertical; min-height: 84px; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 6px 11px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #3b4554; }
+  button.primary { background: #2a4b86; border-color: #3a62a8; }
+  button.danger { color: #ffb3b3; }
+  button:disabled { opacity: .45; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 18px 0 8px; }
+  .task { padding: 8px 10px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; }
+  .task:hover { background: var(--panel); }
+  .task.sel { background: var(--panel); border-color: var(--line); }
+  .task .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task .m { font-size: 12px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .s-done .dot, .dot.s-done, .dot.s-passed { background: var(--ok); }
+  .s-failed .dot, .dot.s-failed, .dot.s-cancelled { background: var(--bad); }
+  .s-running .dot, .s-planning .dot, .s-evaluating .dot, .dot.s-coding, .dot.s-qa, .dot.s-debugging, .dot.s-setup { background: var(--warn); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .empty { color: var(--muted); padding: 60px; text-align: center; }
+  .top { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .top .prompt { font-size: 15px; margin-bottom: 6px; white-space: pre-wrap; }
+  .top .meta { color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--panel2); border: 1px solid var(--line); text-transform: uppercase; letter-spacing: .5px; }
+  .summary { margin-top: 8px; font-size: 13px; }
+  .summary a { color: var(--accent); }
+  .attempts { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+  .card.active { border-color: var(--accent); }
+  .card.winner { box-shadow: 0 0 0 1px var(--ok) inset; }
+  .card .h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .card .name { font-weight: 600; }
+  .stages { display: flex; gap: 3px; margin: 6px 0; }
+  .stages i { flex: 1; height: 4px; border-radius: 2px; background: var(--line); }
+  .stages i.on { background: var(--accent); } .stages i.ok { background: var(--ok); } .stages i.bad { background: var(--bad); }
+  .card .stats { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+  .card .acts { display: flex; gap: 6px; margin-top: 8px; }
+  .card .acts button { font-size: 12px; padding: 3px 8px; }
+  .feed { flex: 1; overflow: auto; padding: 10px 18px 20px; }
+  .ev { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 5px 0; border-bottom: 1px dashed #1f262f; }
+  .who { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; padding-top: 2px; }
+  .who small { display: block; color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .r-orchestrator { color: var(--orch); } .r-coder { color: var(--coder); } .r-qa { color: var(--qa); } .r-debugger { color: var(--debugger); } .r-user, .r-system { color: var(--user); }
+  .tool { font-family: var(--mono); font-size: 12.5px; color: #c8d1dc; cursor: pointer; }
+  .tool .arg { color: var(--muted); }
+  pre { font-family: var(--mono); font-size: 12px; background: #0a0d11; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; overflow: auto; max-height: 340px; margin: 6px 0 2px; white-space: pre-wrap; word-break: break-word; }
+  .msg { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; white-space: pre-wrap; }
+  .msg.report { border-left: 3px solid var(--orch); }
+  .verdict { border-radius: 8px; padding: 8px 10px; border: 1px solid; }
+  .verdict.pass { border-color: #23593f; background: #0f2219; } .verdict.fail { border-color: #6b2c2c; background: #241212; }
+  .verdict ul { margin: 6px 0 0 18px; padding: 0; }
+  .decision { color: var(--orch); }
+  .steer { display: flex; gap: 8px; padding: 10px 18px; border-top: 1px solid var(--line); background: var(--panel); }
+  .steer input { flex: 1; } .steer select { width: 170px; }
+  .diff { position: fixed; inset: 40px 6%; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: none; flex-direction: column; z-index: 5; box-shadow: 0 20px 60px #000a; }
+  .diff.open { display: flex; }
+  .diff .dh { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .diff pre { flex: 1; max-height: none; margin: 0; border: 0; border-radius: 0 0 12px 12px; white-space: pre; }
+  .add { color: #7ee2a8; } .del { color: #ff9a9a; } .hunk { color: var(--accent); } .fileh { color: var(--warn); font-weight: 600; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Night<span>shift</span></h1>
+  <span class="pill" id="info">connecting...</span>
+</header>
+<div class="layout">
+  <aside>
+    <h2 style="margin-top:0">New task</h2>
+    <form id="newTask">
+      <label>Repository (GitHub URL or local path)</label>
+      <input name="repo" required placeholder="https://github.com/you/repo" />
+      <div class="row">
+        <div><label>Base branch</label><input name="baseBranch" value="main" /></div>
+        <div><label>Parallel attempts</label><select name="numAttempts"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
+      </div>
+      <label>What should the agents do?</label>
+      <textarea name="prompt" required placeholder="Fix the off-by-one in pagination and add a test"></textarea>
+      <button class="primary" style="margin-top:10px;width:100%">Start</button>
+    </form>
+    <h2>Tasks</h2>
+    <div id="tasks"></div>
+  </aside>
+  <main id="main"><div class="empty">Pick a task or start a new one.</div></main>
+</div>
+<div class="diff" id="diff"><div class="dh"><b id="diffTitle">Diff</b><button onclick="closeDiff()">Close</button></div><pre id="diffBody"></pre></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const api = (p, opts = {}) => fetch("/api" + p, { headers: { "content-type": "application/json" }, ...opts }).then((r) => r.json());
+const STAGES = ["setup", "coding", "qa", "debugging"];
+let current = null, source = null, events = [], detail = null, filter = "all", refreshTimer = null;
+
+api("/info").then((i) => {
+  const el = $("#info");
+  el.textContent = `${i.provider} · ${i.sandbox} sandbox · PRs: ${i.prs}${i.demo ? " · demo mode (scripted model)" : ""}`;
+  if (i.demo) el.classList.add("demo");
+});
+
+$("#newTask").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  const t = await api("/tasks", { method: "POST", body: JSON.stringify(f) });
+  if (t.error) return alert(t.error);
+  e.target.prompt.value = "";
+  await loadTasks();
+  openTask(t.id);
+};
+
+async function loadTasks() {
+  const tasks = await api("/tasks");
+  $("#tasks").innerHTML = tasks.map((t) => `
+    <div class="task s-${t.status} ${t.id === current ? "sel" : ""}" onclick="openTask('${t.id}')">
+      <div class="t"><span class="dot"></span>${esc(t.prompt.split("\n")[0])}</div>
+      <div class="m">${esc(t.status)} · ${t.numAttempts} attempt${t.numAttempts > 1 ? "s" : ""} · ${new Date(t.createdAt).toLocaleTimeString()}</div>
+    </div>`).join("") || `<div class="muted">No tasks yet.</div>`;
+}
+
+async function openTask(id) {
+  current = id; events = []; filter = "all";
+  if (source) source.close();
+  await refresh();
+  loadTasks();
+  source = new EventSource(`/api/tasks/${id}/stream`);
+  source.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+    events.push(e);
+    appendEvent(e);
+    if (/status|created|pr|setup|verdict|evaluation/.test(e.kind)) scheduleRefresh();
+  };
+}
+
+function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { refresh(); loadTasks(); }, 150); }
+
+async function refresh() {
+  detail = await api(`/tasks/${current}`);
+  renderMain();
+}
+
+function renderMain() {
+  // Build the layout once per task; later refreshes only touch the header and attempt cards,
+  // so the steering box keeps whatever the user is typing.
+  if (!$("#feed") || $("#main").dataset.task !== current) {
+    $("#main").dataset.task = current;
+    $("#main").innerHTML = `
+      <div class="top" id="top"></div>
+      <div class="attempts" id="attempts"></div>
+      <div class="feed" id="feed"></div>
+      <div class="steer">
+        <input id="steerText" placeholder="Steer the agents while they work, e.g. 'also handle empty input'" />
+        <select id="steerTarget"></select>
+        <button class="primary" id="steerBtn" onclick="steer()">Send</button>
+      </div>`;
+    $("#steerText").onkeydown = (e) => e.key === "Enter" && steer();
+    redrawFeed();
+  }
+  const { task, attempts, paused } = detail;
+  const live = ["queued", "planning", "running", "evaluating"].includes(task.status);
+  const prEv = [...events].reverse().find((e) => e.kind === "pr");
+  $("#top").innerHTML = `
+      <div class="prompt">${esc(task.prompt)}</div>
+      <div class="meta">
+        <span class="badge">${esc(task.status)}${paused ? " · paused" : ""}</span>
+        <span>${esc(task.repo)} @ ${esc(task.baseBranch)}</span>
+        <span style="flex:1"></span>
+        ${live ? `<button onclick="act('${paused ? "resume" : "pause"}')">${paused ? "Resume" : "Pause"}</button><button class="danger" onclick="act('cancel')">Cancel</button>` : ""}
+      </div>
+      ${task.summary ? `<div class="summary">${task.prUrl ? `Pull request: <a href="${esc(task.prUrl)}" target="_blank">${esc(task.prUrl)}</a>` : esc(task.summary)}
+        ${prEv && prEv.data.dryRun ? ` <a href="#" onclick="showPR();return false">View PR description</a>` : ""}</div>` : ""}`;
+  $("#attempts").innerHTML = attempts.map((a) => card(a, task)).join("") || `<div class="muted">Planning attempts...</div>`;
+  const sel = $("#steerTarget"), keep = sel.value;
+  sel.innerHTML = `<option value="">All attempts</option>${attempts.map((a) => `<option value="${a.id}">Attempt ${a.index} (${esc(a.strategy.name)})</option>`).join("")}`;
+  sel.value = keep;
+  for (const el of [$("#steerText"), sel, $("#steerBtn")]) el.disabled = !live;
+}
+
+function redrawFeed() {
+  const feed = $("#feed");
+  feed.innerHTML = "";
+  events.filter(visible).forEach((e) => { const el = renderEvent(e); if (el) feed.appendChild(el); });
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function card(a, task) {
+  const idx = STAGES.indexOf(a.status);
+  const done = a.status === "passed" || a.status === "failed" || a.status === "cancelled";
+  const bars = STAGES.map((s, i) => {
+    let c = "";
+    if (done) c = a.status === "passed" ? "ok" : (i <= Math.max(1, a.fixRounds ? 3 : 2) ? "bad" : "");
+    else if (i < idx) c = "ok"; else if (i === idx) c = "on";
+    return `<i class="${c}" title="${s}"></i>`;
+  }).join("");
+  const winner = task.winnerAttemptId === a.id;
+  const canShip = !["queued", "planning", "running", "evaluating"].includes(task.status) && a.status === "passed" && !winner;
+  return `<div class="card ${filter === a.id ? "active" : ""} ${winner ? "winner" : ""}" onclick="setFilter('${a.id}')">
+    <div class="h"><span class="name"><span class="dot s-${a.status}"></span>${a.index}. ${esc(a.strategy.name)}</span><span class="badge">${winner ? "shipped" : esc(a.status)}</span></div>
+    <div class="stages">${bars}</div>
+    <div class="stats">
+      <span>score ${a.score ?? "-"}</span><span>fix rounds ${a.fixRounds}</span>
+      <span>setup ${a.setupMs == null ? "-" : (a.setupMs / 1000).toFixed(1) + "s"}${a.setupCached ? " (cached)" : ""}</span>
+    </div>
+    <div class="acts">
+      <button onclick="event.stopPropagation();showDiff('${a.id}')">Diff</button>
+      ${canShip ? `<button onclick="event.stopPropagation();ship('${a.id}')">Ship this instead</button>` : ""}
+    </div>
+  </div>`;
+}
+
+function setFilter(id) { filter = filter === id ? "all" : id; renderMain(); redrawFeed(); }
+const visible = (e) => !["usage", "task.created"].includes(e.kind) && (filter === "all" || e.attemptId === filter || e.attemptId === null);
+
+function appendEvent(e) {
+  const feed = $("#feed");
+  if (!feed || !visible(e)) return;
+  const stick = feed.scrollTop + feed.clientHeight > feed.scrollHeight - 60;
+  const el = renderEvent(e);
+  if (el) feed.appendChild(el);
+  if (stick) feed.scrollTop = feed.scrollHeight;
+}
+
+function attemptLabel(id) {
+  if (!id || !detail) return "";
+  const a = detail.attempts.find((x) => x.id === id);
+  return a ? `attempt ${a.index}` : "";
+}
+
+function renderEvent(e) {
+  const d = e.data || {}; const el = document.createElement("div"); el.className = "ev";
+  let body = "";
+  switch (e.kind) {
+    case "plan": body = `<div class="msg"><b>Plan</b> (${esc(d.source)}):\n${d.strategies.map((s, i) => `${i + 1}. ${esc(s.name)}: ${esc(s.instructions)}`).join("\n")}</div>`; break;
+    case "setup":
+      body = d.phase === "config"
+        ? `<span class="muted">Detected setup: <code>${esc(d.config.setup || "none")}</code>, tests: <code>${esc(d.config.test || "none")}</code></span>`
+        : `<span class="muted">${d.phase === "base" ? "Base environment" : "Environment"} ready in ${(d.ms / 1000).toFixed(1)}s ${d.cached ? "· restored from cache" : d.ran ? "· installed" : ""}</span>`; break;
+    case "llm.text": body = `<div>${esc(d.text)}</div>`; break;
+    case "tool.call": el.dataset.call = d.id; body = `<div class="tool">▸ ${esc(d.name)} <span class="arg">${esc(argSummary(d.name, d.args))}</span></div>`; break;
+    case "tool.result":
+      if (d.name === "orchestrator_tests") body = `<details><summary class="muted">Orchestrator ran the test suite: ${d.error ? "failing" : "passing"}</summary><pre>${esc(d.output)}</pre></details>`;
+      else {
+        const row = d.id && document.querySelector(`#feed [data-call="${CSS.escape(d.id)}"] > div:last-child`);
+        const det = `<details${d.error ? " open" : ""}><summary class="muted">${d.error ? "error" : "output"}</summary><pre>${esc(d.output)}</pre></details>`;
+        if (row) { row.insertAdjacentHTML("beforeend", det); return null; }
+        body = det;
+      } break;
+    case "report": body = `<div class="msg report">→ orchestrator (${esc(d.status)}): ${esc(d.message)}</div>`; break;
+    case "verdict": body = `<div class="verdict ${d.pass ? "pass" : "fail"}"><b>QA round ${d.round + 1}: ${d.pass ? "PASS" : "FAIL"}</b> · score ${d.score}/10 · tests ${d.testsPassed === null ? "n/a" : d.testsPassed ? "passing" : "failing"}<div>${esc(d.summary)}</div>${d.problems.length ? `<ul>${d.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}</div>`; break;
+    case "diagnosis": body = `<div class="msg"><b>Diagnosis ${d.fixed ? "(fixed)" : "(not fixed)"}</b>\nRoot cause: ${esc(d.root_cause)}\nFix: ${esc(d.fix)}</div>`; break;
+    case "evaluation": body = `<div class="decision">Decision: <b>${esc(d.decision)}</b>${d.reason ? ` · ${esc(d.reason)}` : ""}</div>`; break;
+    case "steer": body = `<div class="msg">${esc(d.text)} <span class="muted">→ ${d.target === "all" ? "all attempts" : attemptLabel(d.target)}</span></div>`; break;
+    case "steer.delivered": body = `<span class="muted">Received the steering message.</span>`; break;
+    case "pr": body = d.url ? `<div>Opened <a href="${esc(d.url)}" target="_blank">${esc(d.url)}</a></div>` : `<div>PR ready (not opened: ${esc(d.reason)}). <a href="#" onclick="showPR();return false">View description</a></div>`; break;
+    case "attempt.created": body = `<span class="muted">Spawned coder on branch <code>${esc(d.branch)}</code></span>`; break;
+    case "attempt.status": body = `<span class="muted">→ ${esc(d.status)}${d.round !== undefined ? ` (round ${d.round + 1})` : ""}</span>`; break;
+    case "task.status": body = `<span class="muted">Task ${d.status ? "→ " + esc(d.status) : d.paused ? "paused" : "resumed"}</span>`; break;
+    case "error": body = `<div style="color:var(--bad)">${esc(d.message)}</div>`; break;
+    default: body = `<span class="muted">${esc(e.kind)}</span>`;
+  }
+  el.innerHTML = `<div class="who r-${e.role}">${esc(e.role)}<small>${attemptLabel(e.attemptId)}</small></div><div>${body}</div>`;
+  return el;
+}
+
+function argSummary(name, a = {}) {
+  if (a.path) return a.path + (a.old_string ? "  (edit)" : "");
+  if (a.command) return "$ " + a.command;
+  if (a.pattern) return "/" + a.pattern + "/";
+  if (a.message) return a.message;
+  if (a.summary) return a.summary;
+  if (name === "submit_verdict") return a.pass ? "pass" : "fail";
+  return "";
+}
+
+async function act(a) { await api(`/tasks/${current}/${a}`, { method: "POST" }); refresh(); }
+async function steer() {
+  const text = $("#steerText").value.trim(); if (!text) return;
+  await api(`/tasks/${current}/steer`, { method: "POST", body: JSON.stringify({ text, attemptId: $("#steerTarget").value || null }) });
+  $("#steerText").value = "";
+}
+async function ship(id) { await api(`/tasks/${current}/select`, { method: "POST", body: JSON.stringify({ attemptId: id }) }); refresh(); }
+
+function showDiff(id) {
+  const a = detail.attempts.find((x) => x.id === id);
+  $("#diffTitle").textContent = `Attempt ${a.index} · ${a.strategy.name} · ${a.branch}`;
+  $("#diffBody").innerHTML = colorDiff(a.diff || "(no diff yet: it is captured when QA finishes)");
+  $("#diff").classList.add("open");
+}
+function showPR() {
+  const pr = [...events].reverse().find((e) => e.kind === "pr").data;
+  $("#diffTitle").textContent = pr.title;
+  $("#diffBody").textContent = pr.body;
+  $("#diff").classList.add("open");
+}
+function closeDiff() { $("#diff").classList.remove("open"); }
+document.addEventListener("keydown", (e) => e.key === "Escape" && closeDiff());
+function colorDiff(t) {
+  return t.split("\n").map((l) => {
+    const c = l.startsWith("diff --git") ? "fileh" : l.startsWith("@@") ? "hunk" : l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : "";
+    return `<span class="${c}">${esc(l)}</span>`;
+  }).join("\n");
+}
+
+loadTasks().then(() => { const id = location.hash.slice(1); if (id) openTask(id); });
+setInterval(loadTasks, 5000);
+</script>
+</body>
+</html>

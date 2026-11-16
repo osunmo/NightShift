@@ -1,0 +1,29 @@
+{
+  "name": "nightshift",
+  "version": "0.1.0",
+  "description": "Background coding agent: an orchestrator runs parallel coder agents, a QA agent and a debugging agent, then opens a reviewed pull request.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "nightshift": "./bin/nightshift.js"
+  },
+  "scripts": {
+    "dev": "node --no-warnings --import tsx src/cli.ts serve",
+    "start": "node --no-warnings --import tsx src/cli.ts serve",
+    "cli": "node --no-warnings --import tsx src/cli.ts",
+    "eval": "node --no-warnings --import tsx src/eval/run.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "demo": "node --no-warnings --import tsx src/cli.ts demo"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "tsx": "^4.0.0"
+  }
+}
