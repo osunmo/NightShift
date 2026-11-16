@@ -3,7 +3,6 @@
 //   nightshift demo                          start the UI with a scripted model and a demo repo (no API key)
 //   nightshift run --repo <url|path> [--base main] [--attempts 2] [--docker] [--no-pr] "task"
 import { join } from "node:path";
-import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { Bus } from "./bus.ts";
 import { Orchestrator } from "./agents/orchestrator.ts";
@@ -11,7 +10,6 @@ import { configFromEnv } from "./config.ts";
 import { providerFromEnv } from "./llm/index.ts";
 import { demoProvider } from "./llm/demo.ts";
 import { Store } from "./store/db.ts";
-import { FIXTURES, makeRepo } from "./eval/fixtures.ts";
 import type { EventRow } from "./types.ts";
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -20,13 +18,13 @@ async function main() {
   if (cmd === "serve") return (await import("./server/index.ts")).serve();
 
   if (cmd === "demo") {
-    const cfg = configFromEnv();
-    const repo = join(cfg.home, "demo-repo");
-    if (!existsSync(repo)) await makeRepo(repo, FIXTURES.find((f) => f.name === "py-add")!.files);
     process.env.NIGHTSHIFT_PROVIDER = "demo";
-    await (await import("./server/index.ts")).serve();
-    console.log(`\nDemo repo: ${repo}`);
-    console.log(`Paste that path as the repository, use 2 attempts, and any prompt (e.g. "add() returns the wrong result, fix it").`);
+    const { orch, home } = await (await import("./server/index.ts")).serve();
+    const { seedDemo, demoRepo } = await import("./demo/seed.ts");
+    const repo = await demoRepo(home, "py-add");
+    console.log(`\nDemo repo for a live run: ${repo}`);
+    console.log(`Try: "add() returns the wrong result, fix it" with 2 attempts.`);
+    seedDemo(orch, home).catch((e) => console.error("Seeding failed:", e.message));
     return;
   }
 

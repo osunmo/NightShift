@@ -2,10 +2,42 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
+import { existsSync, statSync } from "node:fs";
 import type { Orchestrator } from "../agents/orchestrator.ts";
 
-const WEB = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
+const DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "dist");
+
+const TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".woff2": "font/woff2",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".json": "application/json",
+};
+
+/** Serve the built single-page app from web/dist; unknown paths fall back to index.html. */
+async function serveStatic(pathname: string, res: ServerResponse) {
+  const rel = normalize(decodeURIComponent(pathname)).replace(/^([/\\])+/, "");
+  const file = join(DIST, rel);
+  if (rel && !rel.startsWith("..") && file.startsWith(DIST) && existsSync(file) && statSync(file).isFile()) {
+    const immutable = rel.startsWith("assets/");
+    res.writeHead(200, {
+      "content-type": TYPES[extname(file)] ?? "application/octet-stream",
+      "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+    });
+    return res.end(await readFile(file));
+  }
+  const index = join(DIST, "index.html");
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+  if (existsSync(index)) return res.end(await readFile(index));
+  res.end(`<!doctype html><title>Nightshift</title><body style="font:14px system-ui;padding:40px">
+<h1>Nightshift</h1><p>The web app has not been built yet. Run <code>npm run build:web</code>, then reload.</p>
+<p>The API is available at <code>/api</code>.</p></body>`);
+}
 
 export interface AppDeps {
   orch: Orchestrator;
@@ -43,7 +75,26 @@ export function createApp(deps: AppDeps): Server {
 
   const routes: [string, RegExp, (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => Promise<void>][] = [
     ["GET", /^\/api\/info$/, async (_q, res) => json(res, deps.info)],
-    ["GET", /^\/api\/tasks$/, async (_q, res) => json(res, store.listTasks())],
+    [
+      "GET",
+      /^\/api\/tasks$/,
+      async (_q, res) =>
+        json(
+          res,
+          store.listTasks().map((t) => ({
+            ...t,
+            paused: orch.control(t.id).paused,
+            attempts: store.listAttempts(t.id).map((a) => ({
+              id: a.id,
+              index: a.index,
+              status: a.status,
+              score: a.score,
+              fixRounds: a.fixRounds,
+              strategy: a.strategy.name,
+            })),
+          }))
+        ),
+    ],
     [
       "POST",
       /^\/api\/tasks$/,
@@ -120,15 +171,7 @@ export function createApp(deps: AppDeps): Server {
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://x");
-      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        return res.end(await readFile(join(WEB, "index.html")));
-      }
-      const font = url.pathname.match(/^\/fonts\/([\w.-]+\.woff2)$/);
-      if (req.method === "GET" && font) {
-        res.writeHead(200, { "content-type": "font/woff2", "cache-control": "public, max-age=31536000, immutable" });
-        return res.end(await readFile(join(WEB, "fonts", font[1])));
-      }
+      if (req.method === "GET" && !url.pathname.startsWith("/api/")) return serveStatic(url.pathname, res);
       if (url.pathname.startsWith("/api/") && deps.apiToken) {
         const auth = req.headers.authorization || "";
         const tok = auth.startsWith("Bearer ") ? auth.slice(7) : url.searchParams.get("token");

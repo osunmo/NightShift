@@ -37,7 +37,7 @@ You can steer the agents while they work, pause them, or pick a different attemp
 | Fast setup | Detects the install command, then caches installed dependencies keyed by a hash of the lockfiles. Later attempts and tasks restore the cache instead of reinstalling. | `src/setup/env.ts` |
 | Sandboxes | `local` (fast, for development) or `docker` (one container per attempt, workspace mounted, CPU/memory limits, optional no network) | `src/sandbox/` |
 | Event log | Every step is an event in SQLite. The UI, CLI, PR description and eval all read from it. | `src/store/db.ts`, `src/bus.ts` |
-| Web UI | Prompt composer, a dark agent chat panel where the team reports and you steer, attempt cards with pipeline progress, and Activity / Diff / PR tabs. Fonts (Onest, IBM Plex Mono, OFL) are bundled so it works offline. | `web/index.html` |
+| Web UI | React app: searchable task list, a CI-style run view (jobs, grouped logs, trace waterfall, diff, PR), an inspector with attempt details and the team conversation, steering composer, command palette | `web/` |
 | Eval set | 10 small repos with planted bugs, visible tests for the agents and hidden tests for grading, each validated against a reference fix | `src/eval/` |
 
 ## Quick start
@@ -47,14 +47,14 @@ Requires Node 22.13+ and git. Docker is optional.
 ```bash
 npm install
 
-# Try the UI with no API key (a scripted model plays a realistic run on a demo repo)
+# Try it with no API key: builds the UI, starts a scripted demo model and seeds a task history
 npm run demo
-# open http://localhost:4100, paste the demo repo path it prints, 2 attempts, any prompt
+# open http://localhost:4100 and press C to start a task on the demo repo it prints
 
 # Real runs
 cp .env.example .env     # add ANTHROPIC_API_KEY (or OPENAI_API_KEY / OPENROUTER_API_KEY)
 set -a; source .env; set +a
-npm start                # web UI at http://localhost:4100
+npm run build:web && npm start     # web UI at http://localhost:4100
 
 # Or from the terminal
 npm run cli -- run --repo https://github.com/you/repo --attempts 2 "Fix the off-by-one in pagination and add a test"
@@ -62,6 +62,23 @@ npm run cli -- run --repo ./some/local/repo --no-pr "..."
 ```
 
 PRs are opened when `GITHUB_TOKEN` is set (needs `repo` scope) and the repo is a GitHub URL. Otherwise the branch is left ready and the PR description is shown in the UI and CLI.
+
+## Web UI
+
+The UI lives in `web/` (React, Vite, Tailwind CSS v4) and is served by the Nightshift server from `web/dist`.
+
+- **Tasks:** searchable and filterable list with each task's attempts at a glance (`/` to search, `C` for a new task, `⌘K` for the command palette).
+- **Run view:** a job list (plan, every attempt with its coder / QA / debugger runs, evaluation, PR), grouped logs with timestamps, exit codes, expandable tool output and search, a trace waterfall of all agent runs with your steering messages marked on the timeline, a side-by-side attempt comparison, a diff viewer, and the PR description the orchestrator wrote.
+- **Inspector:** attempt details (branch, score, tests, fix rounds, setup, QA reviews, diagnoses) and the team conversation, with a composer to steer one attempt or all of them. Pause, resume, cancel and "ship this attempt instead" are one click.
+- Light and dark themes. Selection lives in the URL, so every view is linkable.
+
+Components come from [shadcn/ui](https://ui.shadcn.com) (copied from the official registry into `web/src/components/ui`). The copy button is [@ncdai/copy-button](https://21st.dev/@ncdai/components/copy-button) from 21st.dev, with its sound and haptic feedback removed.
+
+```bash
+npm run dev            # API server on :4100
+npm run dev:web        # UI with hot reload on :5173, proxies /api to :4100
+npm run build:web      # production build into web/dist
+```
 
 ## Configuration
 
@@ -87,8 +104,8 @@ Each fixture has visible tests the agents can run and a hidden test only the har
 ## Tests
 
 ```bash
-npm test            # 26 tests, no network or API key needed
-npm run typecheck
+npm test            # 28 tests, no network or API key needed
+npm run typecheck   # server and web app
 NIGHTSHIFT_TEST_DOCKER=1 npm test   # also run the Docker sandbox test
 ```
 

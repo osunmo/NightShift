@@ -445,7 +445,7 @@ export class Orchestrator {
     const diagnoses = events.filter((e) => e.kind === "diagnosis").map((e) => e.data);
     const setup = events.find((e) => e.kind === "setup" && e.data.phase === "attempt")?.data;
 
-    const title = `Nightshift: ${firstLine(task.prompt).slice(0, 72)}`;
+    const title = `Nightshift: ${headline(task.prompt)}`;
     const body = [
       `## Task\n${task.prompt}`,
       `## Result\nStrategy: **${attempt.strategy.name}** (attempt ${attempt.index} of ${all.length}). ${reason}`,
@@ -469,7 +469,7 @@ export class Orchestrator {
       .filter(Boolean)
       .join("\n\n");
 
-    await commitAll(attempt.workdir, `${firstLine(task.prompt).slice(0, 72)}\n\nNightshift attempt ${attempt.index} (${attempt.strategy.name}).`);
+    await commitAll(attempt.workdir, `${headline(task.prompt)}\n\nNightshift attempt ${attempt.index} (${attempt.strategy.name}).`);
     let pr;
     try {
       pr = await openPullRequest({
@@ -499,4 +499,13 @@ export class Orchestrator {
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "attempt";
 const firstLine = (s: string) => s.trim().split("\n")[0];
+/** First sentence of the prompt, or a word-boundary cut, at most ~72 characters. */
+export function headline(prompt: string, max = 72): string {
+  const line = firstLine(prompt);
+  const sentence = line.match(/^(.+?[.!?])(\s|$)/)?.[1];
+  if (sentence && sentence.length <= max) return sentence.replace(/[.]$/, "");
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  return cut.slice(0, Math.max(cut.lastIndexOf(" "), 40)).replace(/[\s,;:]+$/, "") + "…";
+}
 const clamp = (n: number, a: number, b: number) => (Number.isFinite(n) ? Math.max(a, Math.min(b, n)) : a);

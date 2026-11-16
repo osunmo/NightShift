@@ -8,10 +8,10 @@ import { demoProvider } from "../llm/demo.ts";
 import { Store } from "../store/db.ts";
 import { createApp } from "./app.ts";
 
-export async function serve() {
+export async function serve(opts: { demoDelayMs?: number } = {}) {
   const cfg = configFromEnv();
   const demo = process.env.NIGHTSHIFT_PROVIDER === "demo";
-  const provider = demo ? demoProvider() : providerFromEnv();
+  const provider = demo ? demoProvider(opts.demoDelayMs ?? 600) : providerFromEnv();
   const store = new Store(join(cfg.home, "nightshift.db"));
   const bus = new Bus(store);
   const orch = new Orchestrator({
@@ -29,7 +29,7 @@ export async function serve() {
     console.log(`Nightshift running at http://localhost:${cfg.port}`);
     console.log(`  provider: ${info.provider}${demo ? " (scripted demo, not a real model)" : ""}, sandbox: ${info.sandbox}, PRs: ${info.prs}`);
   });
-  return server;
+  return { server, orch, store, home: cfg.home };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) serve();
