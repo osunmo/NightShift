@@ -37,7 +37,7 @@ You can steer the agents while they work, pause them, or pick a different attemp
 | Fast setup | Detects the install command, then caches installed dependencies keyed by a hash of the lockfiles. Later attempts and tasks restore the cache instead of reinstalling. | `src/setup/env.ts` |
 | Sandboxes | `local` (fast, for development) or `docker` (one container per attempt, workspace mounted, CPU/memory limits, optional no network) | `src/sandbox/` |
 | Event log | Every step is an event in SQLite. The UI, CLI, PR description and eval all read from it. | `src/store/db.ts`, `src/bus.ts` |
-| Web UI | Live activity feed, attempt cards with progress, diffs, steering box, pause/cancel, "ship this instead" | `web/index.html` |
+| Web UI | Prompt composer, a dark agent chat panel where the team reports and you steer, attempt cards with pipeline progress, and Activity / Diff / PR tabs. Fonts (Onest, IBM Plex Mono, OFL) are bundled so it works offline. | `web/index.html` |
 | Eval set | 10 small repos with planted bugs, visible tests for the agents and hidden tests for grading, each validated against a reference fix | `src/eval/` |
 
 ## Quick start

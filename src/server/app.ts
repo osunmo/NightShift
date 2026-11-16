@@ -124,6 +124,11 @@ export function createApp(deps: AppDeps): Server {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         return res.end(await readFile(join(WEB, "index.html")));
       }
+      const font = url.pathname.match(/^\/fonts\/([\w.-]+\.woff2)$/);
+      if (req.method === "GET" && font) {
+        res.writeHead(200, { "content-type": "font/woff2", "cache-control": "public, max-age=31536000, immutable" });
+        return res.end(await readFile(join(WEB, "fonts", font[1])));
+      }
       if (url.pathname.startsWith("/api/") && deps.apiToken) {
         const auth = req.headers.authorization || "";
         const tok = auth.startsWith("Bearer ") ? auth.slice(7) : url.searchParams.get("token");
