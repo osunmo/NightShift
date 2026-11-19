@@ -3,3 +3,4 @@ node_modules/
 eval-results/
 *.log
 web/dist/
+web/showcase-dist/

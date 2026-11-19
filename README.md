@@ -4,6 +4,8 @@ A self-hosted background coding agent. Give it a bug or a small feature, compare
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Settings](#settings) · [Architecture and deployment](docs/architecture.md)
 
+![Nightshift homepage with its project overview and animated run preview](docs/images/nightshift-home.png)
+
 ![Nightshift displaying a completed two-attempt demo run, with the job list, execution timeline, and attempt details](docs/images/nightshift-run.png)
 
 *Recorded demo showing two parallel attempts, a QA rejection and repair, and the selected result.*
@@ -50,6 +52,10 @@ npm run cli -- run --repo ./path/to/repo --no-pr "Fix the pagination off-by-one 
 - **GitHub** connects a GitHub App and lists the repositories in the selected installation. Nightshift uses short-lived, repository-scoped tokens to clone private repositories, push branches, and open PRs. [GitHub App setup](docs/architecture.md#github-app-repository-access)
 - **Models** accepts OpenAI, Anthropic, and OpenRouter API keys and encrypts keys saved through the UI. Server environment variables also work, and Ollama is available for local models. [Model configuration](docs/architecture.md#configuration)
 - **Preferences** controls automatic draft PRs and agent rules for new tasks started from the browser.
+
+## Host the homepage
+
+The public showcase serves the landing page and its recorded demo. It runs without API keys or a database. The repository includes a Heroku `Procfile` and builds the showcase automatically on deploy. Connect the GitHub repository to an existing Heroku app, then deploy `main`. To preview the same build locally, run `npm run build:showcase` and `node web/serve-showcase.mjs`.
 
 ## Engineering notes
 

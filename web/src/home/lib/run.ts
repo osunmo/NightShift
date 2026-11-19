@@ -27,6 +27,7 @@ export const RECORDED: RunData = prepare(recorded.task as Task, recorded.attempt
 export function useRunData(): RunData {
   const [data, setData] = useState<RunData>(RECORDED);
   useEffect(() => {
+    if (import.meta.env.MODE === "showcase") return;
     let cancelled = false;
     (async () => {
       try {

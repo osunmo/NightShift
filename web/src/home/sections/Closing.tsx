@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { NAV } from "../data/content";
-import { HashLink, LaunchButton, Logo, APP_URL } from "../components/ui";
+import { HashLink, LaunchButton, Logo, APP_URL, APP_LABEL } from "../components/ui";
 import { EASE, gsap, SplitText, useGSAP, useReduced } from "../lib/motion";
 
 const TICKS = 96;
@@ -64,7 +64,7 @@ export function Closing() {
           <ul className="flex flex-wrap gap-x-5 gap-y-2 text-mute">
             <li>
               <a href={APP_URL} className="transition-colors hover:text-fg">
-                App
+                {APP_LABEL}
               </a>
             </li>
             {NAV.map((n) => (

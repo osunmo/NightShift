@@ -2,7 +2,9 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { scrollToHash } from "../lib/motion";
 
-export const APP_URL = "/app/";
+const showcase = import.meta.env.MODE === "showcase";
+export const APP_URL = showcase ? "https://github.com/osunmo/NightShift#quick-start" : "/app/";
+export const APP_LABEL = showcase ? "Run locally" : "Launch app";
 
 export function Logo({ className }: { className?: string }) {
   return (
@@ -12,7 +14,7 @@ export function Logo({ className }: { className?: string }) {
   );
 }
 
-export function LaunchButton({ className, size = "md", children = "Launch app" }: { className?: string; size?: "sm" | "md" | "lg"; children?: ReactNode }) {
+export function LaunchButton({ className, size = "md", children = APP_LABEL }: { className?: string; size?: "sm" | "md" | "lg"; children?: ReactNode }) {
   return (
     <a
       href={APP_URL}

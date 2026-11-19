@@ -16,6 +16,8 @@
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "demo": "npm run build:web && node --no-warnings --import tsx src/cli.ts demo",
     "build:web": "vite build --config web/vite.config.ts",
+    "build:showcase": "vite build --config web/vite.config.ts --mode showcase",
+    "heroku-postbuild": "npm run build:showcase",
     "dev:web": "vite --config web/vite.config.ts"
   },
   "engines": {
