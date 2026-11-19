@@ -38,6 +38,7 @@ const t = (e: EventRow) => new Date(e.ts).getTime();
 
 function label(runId: string): string {
   if (runId === "coder") return "Code";
+  if (runId.startsWith("coder-")) return "Code (resumed)";
   const [kind, n] = runId.split("-");
   if (kind === "qa") return `QA review ${n}`;
   if (kind === "debugger") return `Debug round ${n}`;
@@ -163,7 +164,9 @@ export type LogLine =
   | { id: number; ts: number; role: Role; kind: "verdict"; data: any }
   | { id: number; ts: number; role: Role; kind: "diagnosis"; data: any }
   | { id: number; ts: number; role: Role; kind: "setup"; data: any }
-  | { id: number; ts: number; role: Role; kind: "error"; text: string };
+  | { id: number; ts: number; role: Role; kind: "error"; text: string }
+  | { id: number; ts: number; role: Role; kind: "recovery"; text: string }
+  | { id: number; ts: number; role: Role; kind: "checkpoint"; sha: string; pushed: boolean };
 
 export function logLines(run: Run): LogLine[] {
   const out: LogLine[] = [];
@@ -204,6 +207,16 @@ export function logLines(run: Run): LogLine[] {
       case "setup":
         out.push({ ...base, kind: "setup", data: d });
         break;
+      case "recovery":
+        out.push({
+          ...base,
+          kind: "recovery",
+          text: d.sandbox === "replaced" ? `Sandbox was lost (${d.reason}); started a new one with the same files and reran the command` : `Resumed after an interruption (was ${d.attemptStatus})`,
+        });
+        break;
+      case "checkpoint":
+        out.push({ ...base, kind: "checkpoint", sha: d.sha, pushed: !!d.pushed });
+        break;
       case "error":
         out.push({ ...base, kind: "error", text: d.message });
         break;
@@ -218,7 +231,10 @@ export function lineText(l: LogLine): string {
     case "report":
     case "steer":
     case "error":
+    case "recovery":
       return l.text;
+    case "checkpoint":
+      return `checkpoint ${l.sha}`;
     case "call":
       return `${l.name} ${JSON.stringify(l.args)} ${l.output ?? ""}`;
     case "check":

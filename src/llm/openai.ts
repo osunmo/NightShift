@@ -7,13 +7,17 @@ export class OpenAICompatibleProvider implements LLMProvider {
     public name: string,
     private apiKey: string,
     private baseUrl: string,
-    private defaultModel: string
+    private defaultModel: string,
+    // Always cap the reply: without it, OpenRouter reserves credit for the model's maximum
+    // (65k tokens on some models) on every call.
+    private maxTokens = 8192
   ) {}
 
   async chat(req: LLMRequest): Promise<LLMResponse> {
     const body: any = {
       model: req.model || this.defaultModel,
       messages: req.messages.map(toOpenAI),
+      max_tokens: this.maxTokens,
     };
     if (req.tools.length)
       body.tools = req.tools.map((t) => ({
@@ -26,7 +30,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       body: JSON.stringify(body),
     });
     const json: any = await res.json();
-    const msg = json.choices?.[0]?.message ?? {};
+    // OpenRouter can answer 200 with an error from the upstream provider; never treat that as an empty reply.
+    if (json.error || !Array.isArray(json.choices)) throw new Error(`Provider error: ${JSON.stringify(json.error ?? json).slice(0, 500)}`);
+    const msg = json.choices[0]?.message ?? {};
     return {
       text: msg.content ?? "",
       toolCalls: (msg.tool_calls ?? []).map((tc: any) => ({

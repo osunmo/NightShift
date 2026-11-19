@@ -6,7 +6,8 @@ export class AnthropicProvider implements LLMProvider {
   constructor(
     private apiKey: string,
     private defaultModel = process.env.NIGHTSHIFT_MODEL || "claude-sonnet-5-5",
-    private baseUrl = process.env.NIGHTSHIFT_ANTHROPIC_BASE_URL || "https://api.anthropic.com"
+    private baseUrl = process.env.NIGHTSHIFT_ANTHROPIC_BASE_URL || "https://api.anthropic.com",
+    private maxTokens = 8192
   ) {}
 
   async chat(req: LLMRequest): Promise<LLMResponse> {
@@ -17,7 +18,7 @@ export class AnthropicProvider implements LLMProvider {
     const messages = toAnthropicMessages(req.messages.filter((m) => m.role !== "system"));
     const body = {
       model: req.model || this.defaultModel,
-      max_tokens: 8192,
+      max_tokens: this.maxTokens,
       system,
       messages,
       tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),

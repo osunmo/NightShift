@@ -1,5 +1,5 @@
 // Push the winning branch and open a pull request through the GitHub REST API.
-import { git, parseGitHub, withToken } from "./workspace.ts";
+import { gitRemote, parseGitHub } from "./workspace.ts";
 
 export interface PRRequest {
   repoUrl: string;
@@ -10,6 +10,7 @@ export interface PRRequest {
   body: string;
   token?: string;
   dryRun?: boolean;
+  draft?: boolean;
   fetchImpl?: typeof fetch;
 }
 
@@ -24,22 +25,23 @@ export interface PRResult {
 export async function openPullRequest(req: PRRequest): Promise<PRResult> {
   const gh = parseGitHub(req.repoUrl);
   if (req.dryRun || !req.token || !gh) {
-    const reason = req.dryRun ? "dry run" : !gh ? "repo is not a GitHub URL" : "no GITHUB_TOKEN set";
+    const reason = req.dryRun ? "dry run" : !gh ? "repo is not a GitHub URL" : "no GitHub App or token available for this repository";
     return { url: null, dryRun: true, title: req.title, body: req.body, reason };
   }
-  await git(req.worktree, ["push", "--quiet", withToken(req.repoUrl, req.token), `${req.branch}:${req.branch}`], 5 * 60_000);
+  await gitRemote(req.worktree, "push", req.repoUrl, ["--quiet"], [`${req.branch}:${req.branch}`], 5 * 60_000, req.token);
   const f = req.fetchImpl ?? fetch;
   const res = await f(`https://api.github.com/repos/${gh.owner}/${gh.repo}/pulls`, {
     method: "POST",
+    redirect: "error",
     headers: {
       authorization: `Bearer ${req.token}`,
       accept: "application/vnd.github+json",
       "content-type": "application/json",
       "x-github-api-version": "2022-11-28",
     },
-    body: JSON.stringify({ title: req.title, body: req.body, head: req.branch, base: req.baseBranch, draft: false }),
+    body: JSON.stringify({ title: req.title, body: req.body, head: req.branch, base: req.baseBranch, draft: req.draft ?? false }),
   });
-  if (!res.ok) throw new Error(`GitHub PR creation failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`GitHub PR creation failed: ${res.status} ${(await res.text()).replaceAll(req.token, "[redacted]")}`);
   const json: any = await res.json();
   return { url: json.html_url, dryRun: false, title: req.title, body: req.body };
 }

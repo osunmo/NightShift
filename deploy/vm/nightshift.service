@@ -1,0 +1,16 @@
+[Unit]
+Description=Nightshift background coding agent
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@DIR@
+EnvironmentFile=@ENV@
+ExecStart=/usr/bin/env node --no-warnings --import tsx src/cli.ts serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, normalize } from "node:path";
 import { existsSync, statSync } from "node:fs";
+import type { GitHubAppSettings } from "./github-app-settings.ts";
+import { isModelProvider, type ModelSettings } from "./model-settings.ts";
 import type { Orchestrator } from "../agents/orchestrator.ts";
 
 const DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "dist");
@@ -19,7 +21,7 @@ const TYPES: Record<string, string> = {
   ".json": "application/json",
 };
 
-/** Serve the built single-page app from web/dist; unknown paths fall back to index.html. */
+/** Serve the built pages from web/dist: the homepage at / and the application at /app/. */
 async function serveStatic(pathname: string, res: ServerResponse) {
   const rel = normalize(decodeURIComponent(pathname)).replace(/^([/\\])+/, "");
   const file = join(DIST, rel);
@@ -31,7 +33,9 @@ async function serveStatic(pathname: string, res: ServerResponse) {
     });
     return res.end(await readFile(file));
   }
-  const index = join(DIST, "index.html");
+  // /app and anything under it is the application; everything else falls back to the homepage.
+  const isApp = /^\/app(\/|$)/.test(pathname);
+  const index = join(DIST, isApp ? "app/index.html" : "index.html");
   res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   if (existsSync(index)) return res.end(await readFile(index));
   res.end(`<!doctype html><title>Nightshift</title><body style="font:14px system-ui;padding:40px">
@@ -42,7 +46,10 @@ async function serveStatic(pathname: string, res: ServerResponse) {
 export interface AppDeps {
   orch: Orchestrator;
   maxConcurrentTasks: number;
+  resumeOnStart?: boolean;
   apiToken?: string;
+  modelSettings?: ModelSettings;
+  githubApp?: GitHubAppSettings;
   info: Record<string, any>;
 }
 
@@ -50,21 +57,29 @@ export function createApp(deps: AppDeps): Server {
   const { orch } = deps;
   const { store, bus } = orch;
   const queue: string[] = [];
+  const resumable = new Set<string>();
   let running = 0;
 
-  // Tasks that were running when the server stopped cannot be resumed (their processes are gone).
-  for (const t of store.listTasks())
+  // Tasks the previous process left unfinished: resume them from their event log and workspaces
+  // (NIGHTSHIFT_RESUME=0 marks them failed instead, the old behaviour).
+  for (const t of store.listTasks().reverse())
     if (["queued", "planning", "running", "evaluating"].includes(t.status)) {
-      store.updateTask(t.id, { status: "failed", summary: "Interrupted by a server restart." });
+      if (t.status === "queued") queue.push(t.id);
+      else if (deps.resumeOnStart === false) store.updateTask(t.id, { status: "failed", summary: "Interrupted by a server restart." });
+      else {
+        resumable.add(t.id);
+        queue.push(t.id);
+      }
     }
 
   const pump = () => {
+    if (deps.modelSettings && !deps.modelSettings.ready) return;
     while (running < deps.maxConcurrentTasks && queue.length) {
       const id = queue.shift()!;
-      if (store.getTask(id)?.status !== "queued") continue;
+      const resume = resumable.delete(id);
+      if (!resume && store.getTask(id)?.status !== "queued") continue;
       running++;
-      orch
-        .runTask(id)
+      (resume ? orch.resumeTask(id) : orch.runTask(id))
         .catch(() => {})
         .finally(() => {
           running--;
@@ -72,9 +87,66 @@ export function createApp(deps: AppDeps): Server {
         });
     }
   };
+  // Start what was left over from the previous process.
+  if (queue.length) setImmediate(pump);
 
   const routes: [string, RegExp, (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => Promise<void>][] = [
-    ["GET", /^\/api\/info$/, async (_q, res) => json(res, deps.info)],
+    ["GET", /^\/api\/info$/, async (_q, res) => json(res, { ...deps.info, ...deps.modelSettings?.status() })],
+    [
+      "GET",
+      /^\/api\/settings\/github$/,
+      async (req, res) => {
+        if (!canAccessSettings(req, deps.apiToken)) return json(res, { error: "Use a local or authenticated Nightshift session." }, 403);
+        res.setHeader("cache-control", "no-store");
+        if (!deps.githubApp) return json(res, { configured: false });
+        try {
+          json(res, await deps.githubApp.list());
+        } catch {
+          json(res, { error: "Nightshift could not load GitHub App installations or repositories. Check the app credentials and repository access." }, 502);
+        }
+      },
+    ],
+    [
+      "PUT",
+      /^\/api\/settings\/github$/,
+      async (req, res) => {
+        if (!canAccessSettings(req, deps.apiToken)) return json(res, { error: "Use a local or authenticated Nightshift session." }, 403);
+        if (!deps.githubApp) return json(res, { error: "Configure the GitHub App on the server first." }, 404);
+        if (req.headers["content-type"]?.split(";")[0]?.trim() !== "application/json")
+          return json(res, { error: "Expected JSON." }, 415);
+        const payload = await body(req).catch(() => null);
+        const id = payload?.installationId;
+        if (!Number.isSafeInteger(id) || id <= 0) return json(res, { error: "Select a GitHub installation." }, 400);
+        try {
+          if (!await deps.githubApp.connect(id)) return json(res, { error: "This installation is unavailable." }, 404);
+          json(res, { ok: true });
+        } catch {
+          json(res, { error: "Nightshift could not connect the GitHub App." }, 502);
+        }
+      },
+    ],
+    [
+      "PUT",
+      /^\/api\/settings\/models$/,
+      async (req, res) => {
+        if (!deps.modelSettings) return json(res, { error: "Model settings are unavailable." }, 404);
+        if (!canAccessSettings(req, deps.apiToken))
+          return json(res, { error: "Use a local Nightshift session or an authenticated connection." }, 403);
+        if (req.headers["content-type"]?.split(";")[0]?.trim() !== "application/json")
+          return json(res, { error: "Expected JSON." }, 415);
+        const payload = await body(req).catch(() => null);
+        const key = typeof payload?.key === "string" ? payload.key.trim() : "";
+        if (!isModelProvider(payload?.provider) || !key || key.length > 4096 || /[\s\x00-\x1f\x7f]/.test(key))
+          return json(res, { error: "Enter a valid API key for a supported provider." }, 400);
+        try {
+          deps.modelSettings.save(payload.provider, key);
+        } catch {
+          return json(res, { error: "Nightshift could not save the model key." }, 500);
+        }
+        pump();
+        json(res, { ...deps.info, ...deps.modelSettings.status() });
+      },
+    ],
     [
       "GET",
       /^\/api\/tasks$/,
@@ -100,8 +172,13 @@ export function createApp(deps: AppDeps): Server {
       /^\/api\/tasks$/,
       async (req, res) => {
         const b = await body(req);
+        if (deps.modelSettings && !deps.modelSettings.ready)
+          return json(res, { error: "Configure a model key in Settings → Models." }, 503);
         if (!b.prompt || !b.repo) return json(res, { error: "prompt and repo are required" }, 400);
+        if (b.pullRequest !== undefined && b.pullRequest !== "draft" && b.pullRequest !== "off")
+          return json(res, { error: "pullRequest must be draft or off" }, 400);
         const task = store.createTask({
+          pullRequest: b.pullRequest,
           prompt: String(b.prompt),
           repo: String(b.repo),
           baseBranch: String(b.baseBranch || "main"),
@@ -186,6 +263,13 @@ export function createApp(deps: AppDeps): Server {
       if (!res.headersSent) json(res, { error: e.message }, 500);
     }
   });
+}
+
+function canAccessSettings(req: IncomingMessage, apiToken?: string) {
+  const site = req.headers["sec-fetch-site"];
+  const loopback = /^(?:127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(req.socket.remoteAddress ?? "")
+    && /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.host ?? "");
+  return Boolean(apiToken || loopback) && (!site || site === "same-origin" || site === "none");
 }
 
 const q = (req: IncomingMessage) => new URL(req.url ?? "/", "http://x").searchParams;

@@ -69,11 +69,30 @@ export interface TaskDetail {
   paused: boolean;
 }
 
+export type ModelProvider = "openai" | "anthropic" | "openrouter";
+
+export interface GitHubInstallation {
+  id: number;
+  account: string;
+  manageUrl: string;
+  canPublish: boolean;
+}
+
+export type GitHubAppInfo = { configured: false } | {
+  configured: true;
+  installUrl: string;
+  installations: GitHubInstallation[];
+  connection?: GitHubInstallation;
+  repositories: { id: number; name: string; url: string; private: boolean; defaultBranch: string }[];
+};
+
 export interface Info {
   provider: string;
   sandbox: string;
   demo: boolean;
   prs: string;
+  githubConfigured?: boolean;
+  modelKeys?: Record<ModelProvider, boolean>;
 }
 
 export const LIVE: TaskStatus[] = ["queued", "planning", "running", "evaluating"];
@@ -88,9 +107,14 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   info: () => req<Info>("/info"),
+  githubApp: (signal?: AbortSignal) => req<GitHubAppInfo>("/settings/github", { signal }),
+  connectGitHubApp: (installationId: number) =>
+    req<{ ok: boolean }>("/settings/github", { method: "PUT", body: JSON.stringify({ installationId }) }),
+  saveModelKey: (provider: ModelProvider, key: string) =>
+    req<Info>("/settings/models", { method: "PUT", body: JSON.stringify({ provider, key }) }),
   tasks: () => req<Task[]>("/tasks"),
   task: (id: string) => req<TaskDetail>(`/tasks/${id}`),
-  create: (b: { prompt: string; repo: string; baseBranch: string; numAttempts: number }) =>
+  create: (b: { prompt: string; repo: string; baseBranch: string; numAttempts: number; pullRequest?: "draft" | "off" }) =>
     req<Task>("/tasks", { method: "POST", body: JSON.stringify(b) }),
   steer: (id: string, text: string, attemptId: string | null) =>
     req(`/tasks/${id}/steer`, { method: "POST", body: JSON.stringify({ text, attemptId }) }),
@@ -118,7 +142,7 @@ export function useInfo() {
   useEffect(() => {
     api.info().then(setInfo).catch(() => {});
   }, []);
-  return info;
+  return { info, setInfo };
 }
 
 /** One task: detail snapshot + the full event stream over SSE (replayed from the start, then live). */

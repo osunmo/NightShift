@@ -23,3 +23,29 @@ test("docker sandbox: commands run inside the container against the mounted work
     await sb.dispose();
   }
 });
+
+test("docker sandbox replaces a container that disappears, and the workspace survives", { skip: !process.env.NIGHTSHIFT_TEST_DOCKER }, async () => {
+  const { DockerSandbox, dockerConfigFromEnv } = await import("../src/sandbox/docker.ts");
+  const { runProcess } = await import("../src/sandbox/local.ts");
+  const { tmp } = await import("./helpers.ts");
+  const cfg = dockerConfigFromEnv();
+  const sb = new DockerSandbox(await tmp(), cfg, `nightshift-heal-${Date.now().toString(36)}`);
+  const reasons: string[] = [];
+  sb.onRestart = (r) => reasons.push(r);
+  await sb.start();
+  try {
+    assert.equal((await sb.exec("echo kept > note.txt")).code, 0);
+    const [bin, ...pre] = cfg.dockerBin;
+    await runProcess(bin, [...pre, "rm", "-f", sb.name], {}, 30_000); // the container vanishes mid-task
+    const r = await sb.exec("cat note.txt");
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.stdout.trim(), "kept");
+    assert.equal(sb.restarts, 1);
+    assert.equal(reasons.length, 1);
+    const fail = await sb.exec("exit 4");
+    assert.equal(fail.code, 4, "an ordinary failing command is not mistaken for a lost container");
+    assert.equal(sb.restarts, 1);
+  } finally {
+    await sb.dispose();
+  }
+});

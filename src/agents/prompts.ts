@@ -33,6 +33,16 @@ export function coderPrompt(task: string) {
   return `Task:\n${task}`;
 }
 
+/** For a coder picking up an attempt that was interrupted (process restart, lost machine). */
+export function coderResumePrompt(task: string, history: string) {
+  return `Task:\n${task}
+
+You are resuming this task after an interruption. Earlier work on it is already in the workspace: inspect the current files (and the diff) before changing anything, and do not redo what is already done. What was done before the interruption:
+${history || "(nothing recorded)"}
+
+Continue from where it stopped and call finish when the task is complete.`;
+}
+
 export function qaSystem(cfg: RepoConfig): string {
   return `You are the QA agent. A coder agent says it finished a task. Verify it independently and skeptically; you did not write this code.
 

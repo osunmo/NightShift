@@ -28,6 +28,7 @@ export interface TaskRow {
   baseBranch: string;
   status: TaskStatus;
   numAttempts: number;
+  pullRequest?: "draft" | "off";
   winnerAttemptId: string | null;
   prUrl: string | null;
   summary: string | null;
@@ -87,7 +88,9 @@ export type EventKind =
   | "evaluation" // orchestrator decision
   | "pr"
   | "error"
-  | "usage";
+  | "usage"
+  | "recovery" // orchestrator resumed a task or attempt after an interruption
+  | "checkpoint"; // attempt code saved to a hidden git ref
 
 export interface QAVerdict {
   pass: boolean;

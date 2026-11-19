@@ -6,6 +6,7 @@ import { Sidebar } from "./Sidebar";
 import { TasksPage } from "./TasksPage";
 import { TaskPage } from "./task/TaskPage";
 import { NewTaskDialog } from "./NewTaskDialog";
+import { SettingsPage } from "./SettingsPage";
 import { CommandMenu } from "./CommandMenu";
 
 export function useTheme() {
@@ -21,7 +22,7 @@ export function useTheme() {
 
 export function App() {
   const route = useRoute();
-  const info = useInfo();
+  const { info, setInfo } = useInfo();
   const { tasks, refresh } = useTasks();
   const theme = useTheme();
   const [newOpen, setNewOpen] = useState(false);
@@ -43,6 +44,7 @@ export function App() {
   }, []);
 
   const [section, id] = route.path;
+  const settings = section === "settings";
   const taskId = section === "tasks" && id ? id : null;
 
   return (
@@ -52,13 +54,16 @@ export function App() {
           tasks={tasks}
           info={info}
           activeTaskId={taskId}
-          filter={taskId ? null : route.query.get("filter") ?? "all"}
+          settings={settings}
+          filter={taskId || settings ? null : route.query.get("filter") ?? "all"}
           onNew={() => setNewOpen(true)}
           onSearch={() => setCmdOpen(true)}
           theme={theme}
         />
         <main className="flex min-w-0 flex-1 flex-col bg-background">
-          {taskId ? (
+          {settings ? (
+            <SettingsPage section={id} info={info} onInfoChanged={setInfo} />
+          ) : taskId ? (
             <TaskPage key={taskId} id={taskId} query={route.query} onChanged={refresh} />
           ) : (
             <TasksPage tasks={tasks} filter={route.query.get("filter") ?? "all"} q={route.query.get("q") ?? ""} onNew={() => setNewOpen(true)} />

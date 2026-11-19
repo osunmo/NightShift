@@ -57,3 +57,60 @@ test("openai-compatible: tool_calls and tool messages round-trip", async () => {
     m.restore();
   }
 });
+
+test("openai-compatible: every call caps max_tokens (OpenRouter otherwise reserves credit for the model's maximum)", async () => {
+  const m = mockFetch({ choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 3, completion_tokens: 1 } });
+  try {
+    await new OpenAICompatibleProvider("openrouter", "k", "https://example.com/v1", "m", 2048).chat({ role: "coder", messages: [{ role: "user", content: "x" }], tools });
+    assert.equal(m.seen[0].body.max_tokens, 2048);
+  } finally {
+    m.restore();
+  }
+});
+
+test("openai-compatible: an error inside a 200 response is raised, not treated as an empty reply", async () => {
+  const m = mockFetch({ error: { message: "upstream provider failed", code: 502 } });
+  try {
+    await assert.rejects(
+      new OpenAICompatibleProvider("openrouter", "k", "https://example.com/v1", "m").chat({ role: "coder", messages: [{ role: "user", content: "x" }], tools }),
+      /upstream provider failed/
+    );
+  } finally {
+    m.restore();
+  }
+});
+
+test("provider from env: ollama uses the local OpenAI-compatible endpoint; max tokens configurable", async () => {
+  const { providerFromEnv } = await import("../src/llm/index.ts");
+  const p = providerFromEnv({ NIGHTSHIFT_PROVIDER: "ollama", NIGHTSHIFT_MAX_TOKENS: "1024" } as NodeJS.ProcessEnv);
+  assert.equal(p.name, "ollama");
+  const m = mockFetch({ choices: [{ message: { content: "ok" } }] });
+  try {
+    await p.chat({ role: "coder", messages: [{ role: "user", content: "x" }], tools });
+    assert.equal(m.seen[0].url, "http://localhost:11434/v1/chat/completions");
+    assert.equal(m.seen[0].body.model, "qwen2.5-coder:7b");
+    assert.equal(m.seen[0].body.max_tokens, 1024);
+  } finally {
+    m.restore();
+  }
+});
+
+test("concurrency limit: with NIGHTSHIFT_LLM_CONCURRENCY=1, parallel agents' calls run one at a time", async () => {
+  const { limitConcurrency } = await import("../src/llm/index.ts");
+  let active = 0;
+  let peak = 0;
+  const slow = {
+    name: "slow",
+    async chat() {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 30));
+      active--;
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const p = limitConcurrency(slow, 1);
+  const req = { role: "coder" as const, messages: [], tools: [] };
+  await Promise.all([p.chat(req), p.chat(req), p.chat(req), p.chat(req)]);
+  assert.equal(peak, 1);
+});

@@ -1,8 +1,11 @@
 // The orchestrator: plans strategies, runs coder children in parallel, sends each through
 // QA -> (debugger -> QA)* rounds, listens to child reports, evaluates, and opens the PR.
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Bus } from "../bus.ts";
-import { addWorktree, cloneBase, commitAll, diffAgainstBase, diffStat, excludePaths, type BaseWorkspace } from "../git/workspace.ts";
+import { addWorktree, checkpoint, cloneBase, commitAll, diffAgainstBase, diffStat, excludePaths, type BaseWorkspace } from "../git/workspace.ts";
+import type { GitHubTokenPurpose } from "../server/github-app-settings.ts";
 import { openPullRequest } from "../git/github.ts";
 import { createSandbox, type SandboxMode } from "../sandbox/index.ts";
 import type { Sandbox } from "../sandbox/sandbox.ts";
@@ -19,6 +22,7 @@ export interface OrchestratorOptions {
   home: string; // data directory
   sandboxMode: SandboxMode;
   githubToken?: string;
+  githubAppToken?: (repo: string, purpose: GitHubTokenPurpose) => Promise<string | undefined>;
   dryRunPR?: boolean;
   maxFixRounds?: number; // debugger rounds per attempt
   maxSteps?: { coder: number; qa: number; debugger: number };
@@ -33,13 +37,14 @@ interface AttemptCtx {
   verdicts: QAVerdict[];
   diagnoses: { root_cause: string; fix: string; fixed: boolean }[];
   coderSummary: string;
+  run?: string; // agent run in progress, so sandbox restarts show up in that run's log
 }
 
 export class Orchestrator {
   controls = new Map<string, TaskControl>();
   private bases = new Map<string, { base: BaseWorkspace; cfg: RepoConfig }>();
   private attemptCtx = new Map<string, AttemptCtx>();
-  o: Required<Omit<OrchestratorOptions, "githubToken" | "models">> & Pick<OrchestratorOptions, "githubToken" | "models">;
+  o: Required<Omit<OrchestratorOptions, "githubToken" | "githubAppToken" | "models">> & Pick<OrchestratorOptions, "githubToken" | "githubAppToken" | "models">;
 
   constructor(opts: OrchestratorOptions) {
     this.o = {
@@ -50,6 +55,10 @@ export class Orchestrator {
       selfReview: true,
       ...opts,
     };
+  }
+
+  private async githubToken(repo: string, purpose: GitHubTokenPurpose) {
+    return (await this.o.githubAppToken?.(repo, purpose)) ?? this.o.githubToken;
   }
 
   get store(): Store {
@@ -102,7 +111,7 @@ export class Orchestrator {
       // 1. Workspace + config
       this.setStatus(taskId, "planning");
       const taskDir = join(this.o.home, "tasks", taskId);
-      const base = await cloneBase(task.repo, task.baseBranch, taskDir, this.o.githubToken);
+      const base = await cloneBase(task.repo, task.baseBranch, taskDir, await this.githubToken(task.repo, "clone"));
       const cfg = await detectConfig(base.dir);
       await excludePaths(base, cfg.cachePaths);
       this.bases.set(taskId, { base, cfg });
@@ -137,30 +146,8 @@ export class Orchestrator {
       );
       for (const row of rows) this.bus.emit(taskId, row.id, "orchestrator", "attempt.created", { strategy: row.strategy, branch: row.branch });
 
-      await Promise.all(
-        rows.map(async (row) => {
-          const ctx = await this.runAttempt(task, row, base, cfg).catch((e) => {
-            this.bus.emit(taskId, row.id, "orchestrator", "error", { message: String(e?.message ?? e) });
-            this.setAttempt(row, "failed", { reason: "crashed" });
-            return null;
-          });
-          if (ctx) ctxs.push(ctx);
-        })
-      );
-      if (control.cancelled) return this.store.getTask(taskId)!;
-
-      // 5. Evaluate and ship
-      this.setStatus(taskId, "evaluating");
-      const winner = await this.pickWinner(task, ctxs);
-      if (!winner) {
-        const summary = "No attempt passed QA. See the attempts for QA findings and debugger diagnoses.";
-        this.store.updateTask(taskId, { summary });
-        this.bus.emit(taskId, null, "orchestrator", "evaluation", { decision: "no-winner", summary });
-        this.setStatus(taskId, "failed");
-        return this.store.getTask(taskId)!;
-      }
-      await this.finalize(taskId, winner.row.id, winner.reason);
-      return this.store.getTask(taskId)!;
+      await this.settleAttempts(task, rows, (row) => this.runAttempt(task, row, base, cfg), ctxs);
+      return await this.evaluateAndShip(task, ctxs);
     } catch (e: any) {
       this.bus.emit(taskId, null, "orchestrator", "error", { message: String(e?.message ?? e) });
       this.store.updateTask(taskId, { summary: String(e?.message ?? e) });
@@ -170,6 +157,139 @@ export class Orchestrator {
       unsubscribe();
       await Promise.all(ctxs.map((c) => c.sandbox.dispose().catch(() => {})));
     }
+  }
+
+  /** Run attempt pipelines in parallel; a crashed pipeline fails its attempt, not the task. */
+  private async settleAttempts(task: TaskRow, rows: AttemptRow[], run: (row: AttemptRow) => Promise<AttemptCtx | null>, ctxs: AttemptCtx[]) {
+    await Promise.all(
+      rows.map(async (row) => {
+        const ctx = await run(row).catch((e) => {
+          this.bus.emit(task.id, row.id, "orchestrator", "error", { message: String(e?.message ?? e) });
+          this.setAttempt(row, "failed", { reason: "crashed" });
+          return null;
+        });
+        if (ctx) ctxs.push(ctx);
+      })
+    );
+  }
+
+  private async evaluateAndShip(task: TaskRow, ctxs: AttemptCtx[]): Promise<TaskRow> {
+    const taskId = task.id;
+    if (this.control(taskId).cancelled) return this.store.getTask(taskId)!;
+    this.setStatus(taskId, "evaluating");
+    const winner = await this.pickWinner(task, ctxs);
+    if (!winner) {
+      const summary = "No attempt passed QA. See the attempts for QA findings and debugger diagnoses.";
+      this.store.updateTask(taskId, { summary });
+      this.bus.emit(taskId, null, "orchestrator", "evaluation", { decision: "no-winner", summary });
+      this.setStatus(taskId, "failed");
+      return this.store.getTask(taskId)!;
+    }
+    await this.finalize(taskId, winner.row.id, winner.reason);
+    return this.store.getTask(taskId)!;
+  }
+
+  // ---------- recovery ----------
+  /**
+   * Continue a task that a previous process left unfinished (crash, restart, VM reboot).
+   *
+   * Nothing is kept in memory between runs, so everything comes from the event log and the
+   * workspaces on disk: the repo config and base commit from the setup event, each attempt's
+   * verdicts and diagnoses from its events, and its code from its worktree. Each attempt resumes at
+   * its last recoverable step (an unfinished agent run is restarted, told what it already did), and
+   * work that had already passed is re-verified before it can ship.
+   */
+  async resumeTask(taskId: string): Promise<TaskRow> {
+    const task = this.store.getTask(taskId)!;
+    const events = this.store.listEvents(taskId);
+    this.bus.emit(taskId, null, "orchestrator", "recovery", { from: task.status });
+
+    // Already shipped before the interruption: just record the outcome.
+    const pr = lastOf(events, (e) => e.kind === "pr");
+    if (pr) {
+      this.setStatus(taskId, "done");
+      return this.store.getTask(taskId)!;
+    }
+    const cfgEv = events.find((e) => e.kind === "setup" && e.data?.phase === "config");
+    const attempts = this.store.listAttempts(taskId);
+    const taskDir = join(this.o.home, "tasks", taskId);
+    if (!cfgEv || !attempts.length || !existsSync(join(taskDir, "base"))) {
+      // Interrupted before any attempt started: nothing worth keeping, start the task over.
+      await rm(taskDir, { recursive: true, force: true });
+      this.store.updateTask(taskId, { status: "queued" });
+      return this.runTask(taskId);
+    }
+
+    const control = this.control(taskId);
+    const unsubscribe = this.bus.onTask(taskId, (e) => this.onChildEvent(task, e));
+    const ctxs: AttemptCtx[] = [];
+    try {
+      const base: BaseWorkspace = { dir: join(taskDir, "base"), baseSha: cfgEv.data.baseSha };
+      const cfg: RepoConfig = cfgEv.data.config;
+      this.bases.set(taskId, { base, cfg });
+      this.setStatus(taskId, "running");
+      await this.settleAttempts(task, attempts, (row) => this.resumeAttempt(task, row, base, cfg, events), ctxs);
+      return await this.evaluateAndShip(task, ctxs);
+    } catch (e: any) {
+      this.bus.emit(taskId, null, "orchestrator", "error", { message: String(e?.message ?? e) });
+      this.store.updateTask(taskId, { summary: String(e?.message ?? e) });
+      this.setStatus(taskId, "failed");
+      return this.store.getTask(taskId)!;
+    } finally {
+      unsubscribe();
+      if (control.cancelled) this.setStatus(taskId, "cancelled");
+      await Promise.all(ctxs.map((c) => c.sandbox.dispose().catch(() => {})));
+    }
+  }
+
+  private async resumeAttempt(task: TaskRow, row: AttemptRow, base: BaseWorkspace, cfg: RepoConfig, events: EventRow[]): Promise<AttemptCtx | null> {
+    if (row.status === "failed" || row.status === "cancelled") return null;
+    if (!existsSync(row.workdir)) return this.runAttempt(task, row, base, cfg); // never got a workspace: start fresh
+
+    const mine = events.filter((e) => e.attemptId === row.id);
+    const ctx = await this.prepareAttempt(task, row, cfg, { worktree: false });
+    ctx.verdicts = mine.filter((e) => e.kind === "verdict").map((e) => { const { round, ...v } = e.data; return v as QAVerdict; });
+    ctx.diagnoses = mine.filter((e) => e.kind === "diagnosis").map((e) => ({ root_cause: e.data.root_cause, fix: e.data.fix, fixed: !!e.data.fixed }));
+    const coderDone = lastOf(mine, (e) => e.kind === "report" && String(e.data?.runId).startsWith("coder") && e.data?.status === "done");
+    ctx.coderSummary = coderDone?.data.message ?? "";
+    this.bus.emit(task.id, row.id, "orchestrator", "recovery", { attemptStatus: row.status, verdicts: ctx.verdicts.length, diagnoses: ctx.diagnoses.length, runId: "setup" });
+
+    // Passed before the interruption: re-verify against the tests before trusting it.
+    if (row.status === "passed") {
+      const t = await this.groundTruthTests(ctx, cfg);
+      if (t.passed === false) {
+        this.bus.emit(task.id, row.id, "orchestrator", "evaluation", { decision: "give-up", reason: "Tests fail after recovery." });
+        return this.done(ctx, "failed");
+      }
+      return this.done(ctx, "passed");
+    }
+
+    // Coder never finished: restart it from the code on disk, told what it already did.
+    if (!coderDone && !ctx.verdicts.length) {
+      const coderRuns = new Set(mine.filter((e) => String(e.data?.runId ?? "").startsWith("coder")).map((e) => e.data.runId)).size;
+      const ok = await this.runCoder(task, ctx, base, cfg, { runId: `coder-${coderRuns + 1}`, resume: this.historyFor(mine) });
+      if (!ok) return ctx;
+    }
+    if (!this.o.selfReview) return this.baselineResult(ctx, base, cfg, !!ctx.coderSummary);
+
+    const v = ctx.verdicts.length;
+    const last = ctx.verdicts.at(-1);
+    if (last?.pass) {
+      await this.scoreAttempt(ctx, base, last.score, last.testsPassed);
+      return this.done(ctx, "passed");
+    }
+    // Failed verdict without its debugger round yet: debug next. Otherwise: review next.
+    const start = v > ctx.diagnoses.length ? { round: v - 1, phase: "debug" as const } : { round: v, phase: "qa" as const };
+    return this.reviewLoop(task, ctx, base, cfg, start);
+  }
+
+  /** What an interrupted attempt already did, for the agent that picks it up. */
+  private historyFor(mine: EventRow[]) {
+    return mine
+      .filter((e) => e.kind === "tool.call" || (e.kind === "llm.text" && e.role === "coder"))
+      .slice(-30)
+      .map((e) => (e.kind === "tool.call" ? `- ${e.data.name} ${JSON.stringify(e.data.args).slice(0, 160)}` : `- said: ${String(e.data.text).slice(0, 200)}`))
+      .join("\n");
   }
 
   // ---------- planning ----------
@@ -209,73 +329,116 @@ export class Orchestrator {
 
   // ---------- one child pipeline ----------
   private async runAttempt(task: TaskRow, row: AttemptRow, base: BaseWorkspace, cfg: RepoConfig): Promise<AttemptCtx> {
-    const control = this.control(task.id);
+    const ctx = await this.prepareAttempt(task, row, cfg, { worktree: base });
+    const ok = await this.runCoder(task, ctx, base, cfg, { runId: "coder" });
+    if (!ok) return ctx;
+    if (!this.o.selfReview) return this.baselineResult(ctx, base, cfg, !!ctx.coderSummary);
+    return this.reviewLoop(task, ctx, base, cfg, { round: 0, phase: "qa" });
+  }
+
+  /** Workspace (unless it already exists), sandbox and dependencies for one attempt. */
+  private async prepareAttempt(task: TaskRow, row: AttemptRow, cfg: RepoConfig, o: { worktree: BaseWorkspace | false }): Promise<AttemptCtx> {
     this.setAttempt(row, "setup");
-    await addWorktree(base, row.workdir, row.branch);
+    if (o.worktree) await addWorktree(o.worktree, row.workdir, row.branch);
     const sandbox = createSandbox(this.o.sandboxMode, row.workdir, row.id.replace(/_/g, "-"));
+    sandbox.onRestart = (reason) => this.bus.emit(task.id, row.id, "orchestrator", "recovery", { sandbox: "replaced", reason, runId: ctx.run ?? "setup" });
     await sandbox.start();
     const ctx: AttemptCtx = { row, sandbox, verdicts: [], diagnoses: [], coderSummary: "" };
     this.attemptCtx.set(row.id, ctx);
-
     const setup = await prepareEnv(sandbox, cfg, this.store, join(this.o.home, "cache"));
     this.store.updateAttempt(row.id, { setupMs: setup.ms, setupCached: setup.cached });
     this.bus.emit(task.id, row.id, "orchestrator", "setup", { phase: "attempt", ms: setup.ms, cached: setup.cached, ran: setup.ran });
+    return ctx;
+  }
 
-    const getDiff = () => diffAgainstBase(row.workdir, base.baseSha);
-    const common = { taskId: task.id, attemptId: row.id, provider: this.o.provider, sandbox, bus: this.bus, control, getDiff, commandTimeoutMs: this.o.commandTimeoutMs };
+  private common(task: TaskRow, ctx: AttemptCtx, base: BaseWorkspace) {
+    return {
+      taskId: task.id,
+      attemptId: ctx.row.id,
+      provider: this.o.provider,
+      sandbox: ctx.sandbox,
+      bus: this.bus,
+      control: this.control(task.id),
+      getDiff: () => diffAgainstBase(ctx.row.workdir, base.baseSha),
+      commandTimeoutMs: this.o.commandTimeoutMs,
+    };
+  }
 
-    // Coder
-    this.setAttempt(row, "coding");
+  /** Run (or, after a recovery, resume) the coder. Returns false if the task was cancelled. */
+  private async runCoder(task: TaskRow, ctx: AttemptCtx, base: BaseWorkspace, cfg: RepoConfig, o: { runId: string; resume?: string }): Promise<boolean> {
+    this.setAttempt(ctx.row, "coding");
+    ctx.run = o.runId;
     const coder = await runAgent({
-      ...common,
+      ...this.common(task, ctx, base),
       role: "coder",
-      runId: "coder",
-      model: row.strategy.model ?? this.o.models?.coder,
-      system: P.coderSystem(cfg, row.strategy),
-      prompt: P.coderPrompt(task.prompt),
+      runId: o.runId,
+      model: ctx.row.strategy.model ?? this.o.models?.coder,
+      system: P.coderSystem(cfg, ctx.row.strategy),
+      prompt: o.resume != null ? P.coderResumePrompt(task.prompt, o.resume) : P.coderPrompt(task.prompt),
       maxSteps: this.o.maxSteps.coder,
     });
-    ctx.coderSummary = coder.result?.args.summary ?? coder.lastText;
-    this.bus.emit(task.id, row.id, "coder", "report", {
+    ctx.coderSummary = coder.result?.args.summary ?? (coder.result ? coder.lastText : "");
+    this.bus.emit(task.id, ctx.row.id, "coder", "report", {
       status: coder.result ? "done" : "blocked",
       message: coder.result ? ctx.coderSummary : `Coder stopped (${coder.stopped}) without finishing.`,
-      runId: "coder",
+      runId: o.runId,
     });
-    if (control.cancelled) return this.done(ctx, "cancelled");
-
-    if (!this.o.selfReview) {
-      const t = await this.groundTruthTests(ctx, cfg);
-      const pass = !!coder.result && t.passed !== false;
-      await this.scoreAttempt(ctx, base, pass ? 5 : 0, t.passed);
-      return this.done(ctx, pass ? "passed" : "failed");
+    await this.checkpoint(task, ctx, o.runId);
+    if (this.control(task.id).cancelled) {
+      this.done(ctx, "cancelled");
+      return false;
     }
+    return true;
+  }
 
-    // QA -> debugger rounds
-    for (let round = 0; ; round++) {
-      this.setAttempt(row, "qa", { round });
-      const verdict = await this.runQA(task, ctx, cfg, round);
-      ctx.verdicts.push(verdict);
-      this.bus.emit(task.id, row.id, "qa", "verdict", { ...verdict, round });
+  private async baselineResult(ctx: AttemptCtx, base: BaseWorkspace, cfg: RepoConfig, coderFinished: boolean) {
+    const t = await this.groundTruthTests(ctx, cfg);
+    const pass = coderFinished && t.passed !== false;
+    await this.scoreAttempt(ctx, base, pass ? 5 : 0, t.passed);
+    return this.done(ctx, pass ? "passed" : "failed");
+  }
 
-      const decision = verdict.pass ? "accept" : round < this.o.maxFixRounds ? "send-to-debugger" : "give-up";
-      this.bus.emit(task.id, row.id, "orchestrator", "evaluation", {
-        decision,
-        round,
-        reason: verdict.pass ? verdict.summary : verdict.problems.join("; ") || verdict.summary,
-      });
-      if (verdict.pass) {
-        await this.scoreAttempt(ctx, base, verdict.score, verdict.testsPassed);
-        return this.done(ctx, "passed");
+  /** QA -> debugger -> QA rounds, starting at any round and phase (so a recovery can re-enter). */
+  private async reviewLoop(task: TaskRow, ctx: AttemptCtx, base: BaseWorkspace, cfg: RepoConfig, start: { round: number; phase: "qa" | "debug" }): Promise<AttemptCtx> {
+    const control = this.control(task.id);
+    const row = ctx.row;
+    let round = start.round;
+    let phase = start.phase;
+    for (;;) {
+      if (phase === "qa") {
+        this.setAttempt(row, "qa", { round });
+        const verdict = await this.runQA(task, ctx, cfg, round);
+        ctx.verdicts.push(verdict);
+        this.bus.emit(task.id, row.id, "qa", "verdict", { ...verdict, round });
+        const decision = verdict.pass ? "accept" : round < this.o.maxFixRounds ? "send-to-debugger" : "give-up";
+        this.bus.emit(task.id, row.id, "orchestrator", "evaluation", {
+          decision,
+          round,
+          reason: verdict.pass ? verdict.summary : verdict.problems.join("; ") || verdict.summary,
+        });
+        if (verdict.pass) {
+          await this.scoreAttempt(ctx, base, verdict.score, verdict.testsPassed);
+          return this.done(ctx, "passed");
+        }
+        if (decision === "give-up" || control.cancelled) {
+          await this.scoreAttempt(ctx, base, Math.min(verdict.score, 4), verdict.testsPassed);
+          return this.done(ctx, control.cancelled ? "cancelled" : "failed");
+        }
+        phase = "debug";
+        continue;
       }
-      if (decision === "give-up" || control.cancelled) {
-        await this.scoreAttempt(ctx, base, Math.min(verdict.score, 4), verdict.testsPassed);
-        return this.done(ctx, control.cancelled ? "cancelled" : "failed");
-      }
 
+      // debug round `round` fixes the problems QA found in review `round`
+      const verdict = ctx.verdicts[round];
+      if (round >= this.o.maxFixRounds || !verdict) {
+        await this.scoreAttempt(ctx, base, Math.min(verdict?.score ?? 0, 4), verdict?.testsPassed ?? null);
+        return this.done(ctx, "failed");
+      }
       this.setAttempt(row, "debugging", { round });
       this.store.updateAttempt(row.id, { fixRounds: round + 1 });
+      ctx.run = `debugger-${round + 1}`;
       const dbg = await runAgent({
-        ...common,
+        ...this.common(task, ctx, base),
         role: "debugger",
         runId: `debugger-${round + 1}`,
         model: this.o.models?.debugger,
@@ -291,12 +454,43 @@ export class Orchestrator {
         message: `Root cause: ${String(diag.root_cause).replace(/\.$/, "")}. Fix: ${diag.fix}`,
         runId: `debugger-${round + 1}`,
       });
+      await this.checkpoint(task, ctx, `debugger-${round + 1}`);
+      round++;
+      phase = "qa";
+    }
+  }
+
+  /**
+   * Save the attempt's current code as a commit on a hidden ref (refs/nightshift/checkpoints/<id>),
+   * without touching its branch, index or files. Pushed to the remote when one is configured, so
+   * the work survives the loss of this machine.
+   */
+  private async checkpoint(task: TaskRow, ctx: AttemptCtx, runId: string) {
+    try {
+      const push = !this.o.dryRunPR && task.pullRequest !== "off";
+      let token: string | undefined;
+      if (push) {
+        try {
+          token = await this.githubToken(task.repo, "checkpoint");
+        } catch (error) {
+          this.bus.emit(task.id, ctx.row.id, "orchestrator", "error", { message: `Remote checkpoint credentials unavailable: ${(error as Error).message}` });
+        }
+      }
+      const r = await checkpoint(ctx.row.workdir, `refs/nightshift/checkpoints/${ctx.row.id}`, `checkpoint ${ctx.row.id}: after ${runId}`, {
+        remote: token ? task.repo : undefined,
+        token,
+        push,
+      });
+      if (r) this.bus.emit(task.id, ctx.row.id, "orchestrator", "checkpoint", { runId, ...r });
+    } catch (e: any) {
+      this.bus.emit(task.id, ctx.row.id, "orchestrator", "error", { message: `Checkpoint failed (work continues): ${e.message}` });
     }
   }
 
   private async runQA(task: TaskRow, ctx: AttemptCtx, cfg: RepoConfig, round: number): Promise<QAVerdict> {
     const control = this.control(task.id);
     const getDiff = () => diffAgainstBase(ctx.row.workdir, this.bases.get(task.id)!.base.baseSha);
+    ctx.run = `qa-${round + 1}`;
     const qa = await runAgent({
       role: "qa",
       runId: `qa-${round + 1}`,
@@ -471,6 +665,7 @@ export class Orchestrator {
 
     await commitAll(attempt.workdir, `${headline(task.prompt)}\n\nNightshift attempt ${attempt.index} (${attempt.strategy.name}).`);
     let pr;
+    const dryRun = this.o.dryRunPR || task.pullRequest === "off";
     try {
       pr = await openPullRequest({
         repoUrl: task.repo,
@@ -479,8 +674,9 @@ export class Orchestrator {
         baseBranch: task.baseBranch,
         title,
         body,
-        token: this.o.githubToken,
-        dryRun: this.o.dryRunPR,
+        token: dryRun ? undefined : await this.githubToken(task.repo, "pull-request"),
+        dryRun,
+        draft: task.pullRequest === "draft",
       });
     } catch (e: any) {
       this.bus.emit(taskId, attemptId, "orchestrator", "error", { message: e.message });
@@ -509,3 +705,8 @@ export function headline(prompt: string, max = 72): string {
   return cut.slice(0, Math.max(cut.lastIndexOf(" "), 40)).replace(/[\s,;:]+$/, "") + "…";
 }
 const clamp = (n: number, a: number, b: number) => (Number.isFinite(n) ? Math.max(a, Math.min(b, n)) : a);
+
+function lastOf<T>(xs: T[], pred: (x: T) => boolean): T | undefined {
+  for (let i = xs.length - 1; i >= 0; i--) if (pred(xs[i])) return xs[i];
+  return undefined;
+}

@@ -44,17 +44,20 @@ export class Store {
     this.db = new DatabaseSync(file);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    if (!this.db.prepare("PRAGMA table_info(tasks)").all().some((column) => column.name === "pull_request")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN pull_request TEXT");
+    }
   }
 
   // ----- tasks -----
-  createTask(t: { prompt: string; repo: string; baseBranch: string; numAttempts: number }): TaskRow {
+  createTask(t: { prompt: string; repo: string; baseBranch: string; numAttempts: number; pullRequest?: TaskRow["pullRequest"] }): TaskRow {
     const id = "t_" + randomUUID().slice(0, 8);
     const ts = now();
     this.db
       .prepare(
-        `INSERT INTO tasks (id,prompt,repo,base_branch,status,num_attempts,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`
+        `INSERT INTO tasks (id,prompt,repo,base_branch,status,num_attempts,created_at,updated_at,pull_request) VALUES (?,?,?,?,?,?,?,?,?)`
       )
-      .run(id, t.prompt, t.repo, t.baseBranch, "queued", t.numAttempts, ts, ts);
+      .run(id, t.prompt, t.repo, t.baseBranch, "queued", t.numAttempts, ts, ts, t.pullRequest ?? null);
     return this.getTask(id)!;
   }
 
@@ -190,6 +193,7 @@ function mapTask(r: any): TaskRow {
     baseBranch: r.base_branch,
     status: r.status,
     numAttempts: r.num_attempts,
+    pullRequest: r.pull_request ?? undefined,
     winnerAttemptId: r.winner_attempt_id,
     prUrl: r.pr_url,
     summary: r.summary,

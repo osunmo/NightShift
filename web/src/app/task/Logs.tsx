@@ -248,6 +248,15 @@ function render(l: LogLine, needle: string): React.ReactNode {
       );
     case "error":
       return <span>{hl(l.text, needle)}</span>;
+    case "recovery":
+      return <span className="text-warning">{hl(l.text, needle)}</span>;
+    case "checkpoint":
+      return (
+        <span className="text-muted-foreground">
+          Checkpoint saved <span className="font-mono">{l.sha.slice(0, 8)}</span>
+          {l.pushed ? " and pushed to the remote" : " (local)"}
+        </span>
+      );
   }
 }
 

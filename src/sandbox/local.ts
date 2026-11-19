@@ -1,6 +1,6 @@
 // Local sandbox: runs commands directly on the host inside the workspace directory.
 // Fast and simple for development; use DockerSandbox for real isolation.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { Sandbox, truncate, type ExecOptions, type ExecResult } from "./sandbox.ts";
 
@@ -25,7 +25,9 @@ export function runProcess(
   timeoutMs = 120_000
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { ...spawnOpts, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    // POSIX: own process group so a timeout can kill the whole tree.
+    // Windows: `detached` would open a new console window per command, so stay attached and hide it.
+    const child = spawn(bin, args, { ...spawnOpts, stdio: ["ignore", "pipe", "pipe"], detached: !IS_WIN, windowsHide: true });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -33,9 +35,7 @@ export function runProcess(
     child.stderr.on("data", (d) => (stderr += d));
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {}
+      killTree(child.pid);
     }, timeoutMs);
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -46,6 +46,16 @@ export function runProcess(
       resolve({ code: 127, stdout, stderr: String(e), timedOut });
     });
   });
+}
+
+const IS_WIN = process.platform === "win32";
+
+function killTree(pid: number | undefined) {
+  if (!pid) return;
+  try {
+    if (IS_WIN) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    else process.kill(-pid, "SIGKILL");
+  } catch {}
 }
 
 /** Host env minus variables that change how child tools behave (e.g. Node's test runner context). */

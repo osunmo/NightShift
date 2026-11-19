@@ -18,7 +18,7 @@ export interface ExecOptions {
 export const MAX_OUTPUT = 20_000;
 
 export abstract class Sandbox {
-  abstract kind: "local" | "docker";
+  abstract kind: "local" | "docker" | "kubernetes";
   constructor(public workdir: string) {
     this.workdir = resolve(workdir);
   }
@@ -26,6 +26,27 @@ export abstract class Sandbox {
   abstract start(): Promise<void>;
   abstract exec(cmd: string, opts?: ExecOptions): Promise<ExecResult>;
   abstract dispose(): Promise<void>;
+
+  /** Called when a vanished container or pod was replaced; the orchestrator logs it. */
+  onRestart?: (reason: string) => void;
+  restarts = 0;
+  static readonly MAX_RESTARTS = 3;
+
+  /**
+   * Run `cmd`; if it failed because the sandbox itself is gone (container removed, pod evicted,
+   * node lost), start a fresh one and run the command again. The workspace lives on the host, so a
+   * replacement sandbox sees exactly the same files: no work is lost.
+   */
+  protected async execRecovering(run: () => Promise<ExecResult>, alive: () => Promise<boolean>, looksGone: (r: ExecResult) => boolean): Promise<ExecResult> {
+    const r = await run();
+    if (r.code === 0 || !looksGone(r) || this.restarts >= Sandbox.MAX_RESTARTS || (await alive())) return r;
+    this.restarts++;
+    const reason = r.stderr.trim().split("\n")[0].slice(0, 200);
+    await this.dispose().catch(() => {});
+    await this.start();
+    this.onRestart?.(reason);
+    return run();
+  }
 
   /** Resolve a workspace-relative path and refuse anything that escapes the workspace. */
   resolvePath(p: string): string {

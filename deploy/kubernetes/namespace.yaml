@@ -1,0 +1,73 @@
+# Namespace and network rules for Nightshift sandbox pods.
+#   kubectl apply -f deploy/kubernetes/namespace.yaml
+#
+# Network policies need a CNI that enforces them (k3s does by default).
+# `kubectl exec` goes through the kubelet, not the pod network, so these rules never block Nightshift
+# itself from running commands in a sandbox.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nightshift
+  # No Pod Security Standard label: "baseline" and "restricted" both forbid hostPath volumes, which
+  # the default workspace mode uses. Each sandbox pod is hardened in its own spec instead: non-root,
+  # no privilege escalation, all capabilities dropped, RuntimeDefault seccomp, no service account
+  # token, and (with Kata) its own kernel.
+---
+# Nothing may connect into a sandbox.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-no-ingress
+  namespace: nightshift
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nightshift-sandbox
+  policyTypes: [Ingress]
+---
+# Sandboxes may reach the public internet (package registries) and cluster DNS, but not the cloud
+# metadata service (instance credentials) or private networks (the VCN, the node, other services).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-egress-public-only
+  namespace: nightshift
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nightshift-sandbox
+      nightshift.dev/network: bridge
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+---
+# NIGHTSHIFT_K8S_NETWORK=none: no network at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-no-egress
+  namespace: nightshift
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nightshift-sandbox
+      nightshift.dev/network: none
+  policyTypes: [Egress]

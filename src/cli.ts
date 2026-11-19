@@ -1,12 +1,16 @@
 // nightshift CLI
 //   nightshift serve                         start the web UI + API
 //   nightshift demo                          start the UI with a scripted model and a demo repo (no API key)
-//   nightshift run --repo <url|path> [--base main] [--attempts 2] [--docker] [--no-pr] "task"
+//   nightshift run --repo <url|path> [--base main] [--attempts 2] [--sandbox local|docker|kubernetes] [--no-pr] "task"
+//   nightshift doctor [--sandbox local|docker|kubernetes]   check that sandboxes start and how isolated they are
+import "./env.ts";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Bus } from "./bus.ts";
 import { Orchestrator } from "./agents/orchestrator.ts";
 import { configFromEnv } from "./config.ts";
+import { parseSandboxMode } from "./sandbox/index.ts";
+import { createGitHubAppSettings } from "./server/github-app-settings.ts";
 import { providerFromEnv } from "./llm/index.ts";
 import { demoProvider } from "./llm/demo.ts";
 import { Store } from "./store/db.ts";
@@ -28,6 +32,14 @@ async function main() {
     return;
   }
 
+  if (cmd === "doctor") {
+    const { values } = parseArgs({ args: rest, options: { sandbox: { type: "string" } } });
+    const mode = values.sandbox ? parseSandboxMode(values.sandbox) : configFromEnv().sandboxMode;
+    const { doctor } = await import("./doctor.ts");
+    const r = await doctor(mode);
+    process.exit(r.ok ? 0 : 1);
+  }
+
   if (cmd === "run") {
     const { values, positionals } = parseArgs({
       args: rest,
@@ -36,7 +48,8 @@ async function main() {
         repo: { type: "string" },
         base: { type: "string", default: "main" },
         attempts: { type: "string", default: "1" },
-        docker: { type: "boolean", default: false },
+        sandbox: { type: "string" },
+        docker: { type: "boolean", default: false }, // shorthand for --sandbox docker
         "no-pr": { type: "boolean", default: false },
         "no-review": { type: "boolean", default: false },
         demo: { type: "boolean", default: false },
@@ -52,8 +65,9 @@ async function main() {
       bus,
       provider: values.demo ? demoProvider(0) : providerFromEnv(),
       home: cfg.home,
-      sandboxMode: values.docker ? "docker" : cfg.sandboxMode,
+      sandboxMode: values.sandbox ? parseSandboxMode(values.sandbox) : values.docker ? "docker" : cfg.sandboxMode,
       githubToken: cfg.githubToken,
+      githubAppToken: values.demo ? undefined : createGitHubAppSettings(cfg.home)?.tokenForRepo,
       dryRunPR: values["no-pr"] || values.demo || cfg.dryRunPR,
       selfReview: !values["no-review"],
     });
@@ -100,7 +114,8 @@ function usage() {
   console.log(`Usage:
   nightshift serve
   nightshift demo
-  nightshift run --repo <github-url|path> [--base main] [--attempts N] [--docker] [--no-pr] [--no-review] [--demo] "task"`);
+  nightshift run --repo <github-url|path> [--base main] [--attempts N] [--sandbox local|docker|kubernetes] [--no-pr] [--no-review] [--demo] "task"
+  nightshift doctor [--sandbox local|docker|kubernetes]`);
   process.exit(1);
 }
 

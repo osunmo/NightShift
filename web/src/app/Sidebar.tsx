@@ -1,4 +1,4 @@
-import { CircleCheck, CircleX, ListTodo, Moon, Plus, Search, Sun, Loader } from "lucide-react";
+import { CircleCheck, CircleX, ListTodo, Moon, Plus, Search, Sun, Loader, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -29,6 +29,7 @@ export function Sidebar(props: {
   tasks: Task[] | null;
   info: Info | null;
   activeTaskId: string | null;
+  settings: boolean;
   filter: string | null;
   onNew: () => void;
   onSearch: () => void;
@@ -108,6 +109,9 @@ export function Sidebar(props: {
       </div>
 
       <div className="border-t border-sidebar-border p-2">
+        <a href="#/settings/github" aria-current={props.settings ? "page" : undefined} className={cn("flex h-8 items-center gap-2 rounded-md px-2 text-[13px] hover:bg-accent", props.settings && "bg-accent font-medium")}>
+          <Settings className="size-4" /> Settings
+        </a>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 px-2 py-2 text-xs">
           <dt className="text-muted-foreground">Model</dt>
           <dd className="truncate font-mono">{props.info ? (props.info.demo ? "scripted demo" : props.info.provider) : "…"}</dd>

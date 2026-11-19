@@ -13,6 +13,7 @@ export interface DockerConfig {
   extraMounts: string[]; // "host:container:ro"
   env: Record<string, string>;
   user?: string; // "uid:gid"
+  runtime?: string; // OCI runtime, e.g. "runsc" (gVisor) or "kata" (Kata Containers microVM)
 }
 
 export function dockerConfigFromEnv(env = process.env): DockerConfig {
@@ -27,6 +28,7 @@ export function dockerConfigFromEnv(env = process.env): DockerConfig {
     extraMounts: (env.NIGHTSHIFT_DOCKER_MOUNTS || "").split(",").filter(Boolean),
     env: extraEnv,
     user: env.NIGHTSHIFT_DOCKER_USER || (process.getuid ? `${process.getuid()}:${process.getgid!()}` : undefined),
+    runtime: env.NIGHTSHIFT_DOCKER_RUNTIME || undefined,
   };
 }
 
@@ -34,7 +36,7 @@ export class DockerSandbox extends Sandbox {
   kind = "docker" as const;
   containerId: string | null = null;
 
-  constructor(workdir: string, private cfg: DockerConfig, private name: string) {
+  constructor(workdir: string, private cfg: DockerConfig, readonly name: string) {
     super(workdir);
   }
 
@@ -45,6 +47,8 @@ export class DockerSandbox extends Sandbox {
 
   async start() {
     await mkdir(this.workdir, { recursive: true });
+    // A container left by a previous process (same attempt, same name) would block the name.
+    await this.docker(["rm", "-f", this.name], 30_000);
     const args = [
       "run",
       "-d",
@@ -67,6 +71,7 @@ export class DockerSandbox extends Sandbox {
     if (this.cfg.memory) args.push("--memory", this.cfg.memory);
     if (this.cfg.cpus) args.push("--cpus", this.cfg.cpus);
     if (this.cfg.user) args.push("--user", this.cfg.user);
+    if (this.cfg.runtime) args.push("--runtime", this.cfg.runtime);
     for (const m of this.cfg.extraMounts) args.push("-v", m);
     for (const [k, v] of Object.entries(this.cfg.env)) args.push("-e", `${k}=${v}`);
     args.push(this.cfg.image, "sleep", "infinity");
@@ -78,9 +83,15 @@ export class DockerSandbox extends Sandbox {
   async exec(cmd: string, opts: ExecOptions = {}): Promise<ExecResult> {
     if (!this.containerId) throw new Error("sandbox not started");
     const envArgs = Object.entries(opts.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-    const r = await this.docker(["exec", ...envArgs, "-w", "/workspace", this.containerId, "bash", "-lc", cmd], opts.timeoutMs);
-    if (r.timedOut) await this.docker(["exec", this.containerId, "bash", "-c", "pkill -KILL -f . || true"], 10_000);
-    return r;
+    return this.execRecovering(
+      async () => {
+        const r = await this.docker(["exec", ...envArgs, "-w", "/workspace", this.containerId!, "bash", "-lc", cmd], opts.timeoutMs);
+        if (r.timedOut) await this.docker(["exec", this.containerId!, "bash", "-c", "pkill -KILL -f . || true"], 10_000);
+        return r;
+      },
+      async () => (await this.docker(["inspect", "-f", "{{.State.Running}}", this.containerId!], 20_000)).stdout.trim() === "true",
+      (r) => /Error response from daemon|No such container|is not running/i.test(r.stderr)
+    );
   }
 
   async dispose() {

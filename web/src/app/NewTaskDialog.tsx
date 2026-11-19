@@ -7,6 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type Task } from "@/lib/api";
+import { readPreferences } from "@/lib/preferences";
 import { shortRepo } from "@/lib/format";
 
 const STRATEGY_HINT: Record<number, string> = {
@@ -38,7 +39,14 @@ export function NewTaskDialog(props: { open: boolean; onOpenChange: (o: boolean)
     if (!prompt.trim() || !repo.trim() || busy) return setError(!repo.trim() ? "Repository is required." : !prompt.trim() ? "Describe the task." : null);
     setBusy(true);
     try {
-      const t = await api.create({ prompt: prompt.trim(), repo: repo.trim(), baseBranch: branch.trim() || "main", numAttempts: Number(attempts) });
+      const preferences = readPreferences();
+      const t = await api.create({
+        prompt: preferences.rules ? `${prompt.trim()}\n\nAgent rules:\n${preferences.rules}` : prompt.trim(),
+        repo: repo.trim(),
+        baseBranch: branch.trim() || "main",
+        numAttempts: Number(attempts),
+        pullRequest: preferences.autoDraft ? "draft" : "off",
+      });
       localStorage.setItem("ns.repo", repo.trim());
       localStorage.setItem("ns.base", branch.trim() || "main");
       setPrompt("");
@@ -56,7 +64,7 @@ export function NewTaskDialog(props: { open: boolean; onOpenChange: (o: boolean)
       <DialogContent className="gap-0 p-0 sm:max-w-[600px]" onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && submit()}>
         <DialogHeader className="border-b px-4 py-3">
           <DialogTitle className="text-sm">New task</DialogTitle>
-          <DialogDescription className="text-xs">The orchestrator plans attempts, runs them in sandboxes, and opens a reviewed pull request.</DialogDescription>
+          <DialogDescription className="text-xs">The orchestrator plans attempts, runs them in sandboxes, and prepares the reviewed result.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4 px-4 py-4">
           <Textarea

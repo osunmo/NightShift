@@ -1,5 +1,6 @@
 // Git workspace management: one base clone per task, one git worktree (and branch) per attempt.
-import { mkdir, readFile, rm, appendFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, appendFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runProcess } from "../sandbox/local.ts";
@@ -20,8 +21,8 @@ export async function cloneBase(repo: string, baseBranch: string, taskDir: strin
   const dir = join(taskDir, "base");
   await rm(dir, { recursive: true, force: true });
   await mkdir(taskDir, { recursive: true });
-  const src = isLocalPath(repo) ? resolve(repo) : withToken(repo, token);
-  await git(taskDir, ["clone", "--quiet", "--branch", baseBranch, src, dir], 10 * 60_000);
+  const src = isLocalPath(repo) ? resolve(repo) : repo;
+  await gitRemote(taskDir, "clone", src, ["--quiet", "--branch", baseBranch], [dir], 10 * 60_000, token);
   await git(dir, ["config", "user.name", "Nightshift"]);
   await git(dir, ["config", "user.email", "nightshift@users.noreply.github.com"]);
   const baseSha = (await git(dir, ["rev-parse", "HEAD"])).trim();
@@ -84,13 +85,95 @@ export function isLocalPath(repo: string) {
   return !/^(https?:\/\/|git@|ssh:\/\/)/.test(repo);
 }
 
-export function withToken(url: string, token?: string) {
-  if (!token || !url.startsWith("https://github.com/")) return url;
-  return url.replace("https://", `https://x-access-token:${token}@`);
+type RemoteGitOperation = "clone" | "push";
+
+export async function gitRemote(
+  cwd: string,
+  operation: RemoteGitOperation,
+  remote: string,
+  beforeRemote: string[],
+  afterRemote: string[],
+  timeoutMs: number,
+  token?: string,
+) {
+  const github = parseGitHub(remote);
+  if (!token || !github) return git(cwd, [operation, ...beforeRemote, "--", remote, ...afterRemote], timeoutMs);
+
+  const url = `https://github.com/${github.owner}/${github.repo}.git`;
+  const credential = Buffer.from(`x-access-token:${token}`).toString("base64");
+  const args = [
+    "-c", "http.followRedirects=false",
+    "-c", "http.extraHeader=",
+    "-c", "credential.helper=",
+    "--config-env=http.https://github.com/.extraHeader=NIGHTSHIFT_GIT_AUTHORIZATION",
+    operation,
+    // A repository hook must not inherit the one-command authorization header.
+    ...(operation === "push" ? ["--no-verify"] : []),
+    ...beforeRemote, "--", url, ...afterRemote,
+  ];
+  const result = await runProcess("git", args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_TRACE_CURL: "0",
+      GIT_CURL_VERBOSE: "0",
+      GIT_TRACE2_ENV_VARS: "",
+      GIT_TRACE_REDACT: "1",
+      NIGHTSHIFT_GIT_AUTHORIZATION: `Authorization: Basic ${credential}`,
+    },
+  }, timeoutMs);
+  if (result.code !== 0) {
+    const detail = (result.stderr || result.stdout).replaceAll(credential, "[redacted]").replaceAll(token, "[redacted]");
+    throw new Error(`git ${operation} ${url} failed: ${detail}`);
+  }
+  return result.stdout;
 }
 
 /** owner/repo from a GitHub URL, or null. */
 export function parseGitHub(url: string): { owner: string; repo: string } | null {
-  const m = url.match(/github\.com[/:]([^/]+)\/([^/.]+?)(\.git)?\/?$/);
-  return m ? { owner: m[1], repo: m[2] } : null;
+  const m = url.match(/^((?:https?:\/\/|ssh:\/\/git@)github\.com\/|git@github\.com:)([a-z0-9-]+)\/([a-z0-9_.-]+)\/?$/i);
+  if (!m) return null;
+  const repo = m[3].replace(/\.git$/i, "");
+  return repo && repo !== "." && repo !== ".." ? { owner: m[2], repo } : null;
+}
+
+/**
+ * Snapshot a worktree's current files as a commit on `ref`, without touching its branch, index or
+ * files (a temporary index is used). Returns null when nothing changed since the last checkpoint.
+ * With `remote`, the ref is also pushed there, so the work survives the loss of this machine.
+ */
+export async function checkpoint(
+  worktree: string,
+  ref: string,
+  message: string,
+  o: { remote?: string; token?: string; push?: boolean } = {}
+): Promise<{ ref: string; sha: string; pushed: boolean } | null> {
+  const tmp = await mkdtemp(join(tmpdir(), "nightshift-ckpt-"));
+  const env = { GIT_INDEX_FILE: join(tmp, "index") };
+  try {
+    const head = (await git(worktree, ["rev-parse", "HEAD"])).trim();
+    await gitEnv(worktree, ["read-tree", head], env);
+    await gitEnv(worktree, ["add", "-A", "."], env);
+    const tree = (await gitEnv(worktree, ["write-tree"], env)).trim();
+    const prev = (await git(worktree, ["rev-parse", "--verify", "--quiet", ref]).catch(() => "")).trim();
+    if (prev && (await git(worktree, ["rev-parse", `${prev}^{tree}`])).trim() === tree) return null;
+    const parents = prev ? ["-p", prev, "-p", head] : ["-p", head];
+    const sha = (await git(worktree, ["commit-tree", tree, ...parents, "-m", message])).trim();
+    await git(worktree, ["update-ref", ref, sha]);
+    let pushed = false;
+    if (o.push && o.remote && !isLocalPath(o.remote)) {
+      await gitRemote(worktree, "push", o.remote, ["--quiet", "--force"], [`${ref}:${ref}`], 2 * 60_000, o.token);
+      pushed = true;
+    }
+    return { ref, sha, pushed };
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+}
+
+async function gitEnv(cwd: string, args: string[], env: Record<string, string>) {
+  const r = await runProcess("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env } }, 120_000);
+  if (r.code !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr.trim()}`);
+  return r.stdout;
 }

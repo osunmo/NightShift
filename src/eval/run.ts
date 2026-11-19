@@ -3,6 +3,7 @@
 //
 //   npm run eval                               # all fixtures, both modes, 1 attempt
 //   npm run eval -- --attempts 2 --only py-add,js-dates --modes review
+import "../env.ts";
 import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,7 @@ export interface EvalRow {
   fixRounds: number;
   seconds: number;
   tokens: number;
+  error?: string; // first error in the task, when it failed (e.g. the model provider refused the call)
 }
 
 export interface EvalOptions {
@@ -71,6 +73,7 @@ export async function runEval(opts: EvalOptions): Promise<{ rows: EvalRow[]; sum
         const r = await runProcess("bash", ["-lc", fx.hiddenCheck.command], { cwd: winner.workdir, env: { ...cleanEnv(), PYTHONDONTWRITEBYTECODE: "1" } }, 120_000);
         solved = r.code === 0;
       }
+      const firstError = store.listEvents(task.id).find((e) => e.kind === "error")?.data?.message as string | undefined;
       const tokens = store
         .listEvents(task.id)
         .filter((e) => e.kind === "usage")
@@ -84,9 +87,10 @@ export async function runEval(opts: EvalOptions): Promise<{ rows: EvalRow[]; sum
         fixRounds: winner?.fixRounds ?? 0,
         seconds: Math.round((Date.now() - t0) / 100) / 10,
         tokens,
+        ...(firstError ? { error: firstError } : {}),
       };
       rows.push(row);
-      log(`${mode.padEnd(9)} ${fx.name.padEnd(20)} ${solved ? "SOLVED" : row.shipped ? "wrong " : "no PR "}  ${row.seconds}s  ${tokens} tok  fix rounds ${row.fixRounds}`);
+      log(`${mode.padEnd(9)} ${fx.name.padEnd(20)} ${solved ? "SOLVED" : row.shipped ? "wrong " : "no PR "}  ${row.seconds}s  ${tokens} tok  fix rounds ${row.fixRounds}${!solved && firstError ? `\n          first error: ${firstError.slice(0, 300)}` : ""}`);
     }
   }
   const summary = Object.fromEntries(

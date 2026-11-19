@@ -4,13 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>Nightshift</title>
+    <title>Nightshift: coding agents that work while you sleep</title>
+    <meta name="description" content="Nightshift runs coding agents in parallel, has an independent QA agent check every change, sends rejected work to a debugger, and opens the pull request that survives review." />
+    <meta name="theme-color" content="#0a0a0b" />
     <script>
-      try { if ((localStorage.getItem("ns.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark") document.documentElement.classList.add("dark"); } catch {}
+      // The app used to live at /#/tasks/...; keep those links working.
+      if (/^#\/tasks/.test(location.hash)) location.replace("/app/" + location.hash);
+      // Theme is shared with the app (same key). The homepage defaults to dark.
+      try { if (localStorage.getItem("ns.theme") === "light") document.documentElement.classList.add("light"); } catch {}
     </script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/home/main.tsx"></script>
   </body>
 </html>

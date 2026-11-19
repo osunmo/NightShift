@@ -1,0 +1,198 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter-tight";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/*
+ * Homepage visual system. Separate entry and stylesheet from the application (web/src/styles.css),
+ * so nothing here can reach the dashboard.
+ *
+ * Near-black canvas, white type, gray interface detail. One accent (sodium amber) used only for
+ * "live" signals: the running caret, the active tick, a steering message.
+ */
+:root {
+  --bg: #030303;
+  --s1: #0b0b0b; /* panels on the canvas */
+  --s2: #121212; /* feature plates */
+  --s3: #1a1a1a; /* raised rows, inputs */
+  --line: rgb(255 255 255 / 0.07);
+  --line-2: rgb(255 255 255 / 0.12);
+  --fg: #f1f1f1;
+  --fg-2: #c9c9c9;
+  --mute: #8b8b8b;
+  --dim: #555;
+  --accent: #ffb224;
+  --ok: #7fd69b;
+  --bad: #f27a7a;
+  --on-fg: #000; /* text on fg-filled buttons */
+  --shadow: 0 30px 80px -30px rgb(0 0 0 / 0.9), 0 0 0 1px rgb(0 0 0 / 0.6);
+  --nav-h: 64px;
+}
+
+/* Light mode: same system, inverted. Warm paper, ink type, darker status colors for contrast. */
+html.light {
+  --bg: #f6f6f3;
+  --s1: #ffffff;
+  --s2: #ecece8;
+  --s3: #e2e2dd;
+  --line: rgb(0 0 0 / 0.08);
+  --line-2: rgb(0 0 0 / 0.14);
+  --fg: #0c0c0c;
+  --fg-2: #2f2f2f;
+  --mute: #66665f;
+  --dim: #9a9a93;
+  --accent: #a85f00;
+  --ok: #1b7f45;
+  --bad: #c2373b;
+  --on-fg: #fff;
+  --shadow: 0 24px 60px -28px rgb(0 0 0 / 0.22), 0 0 0 1px rgb(0 0 0 / 0.04);
+}
+
+@theme inline {
+  --font-display: "Inter Tight Variable", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-bg: var(--bg);
+  --color-s1: var(--s1);
+  --color-s2: var(--s2);
+  --color-s3: var(--s3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-mute: var(--mute);
+  --color-dim: var(--dim);
+  --color-accent: var(--accent);
+  --color-ok: var(--ok);
+  --color-bad: var(--bad);
+  --color-on-fg: var(--on-fg);
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    color-scheme: dark;
+    scroll-padding-top: calc(var(--nav-h) + 16px);
+  }
+  html.light {
+    color-scheme: light;
+  }
+  body {
+    @apply bg-bg font-sans text-fg antialiased;
+    font-size: 15px;
+    line-height: 1.55;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  :focus-visible {
+    outline: 1.5px solid var(--fg);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+}
+
+/*
+ * Type scale. Every heading on the page uses one of these; nothing sets its own size.
+ * Display face is Inter Tight 500 with tight tracking (the reference uses a grotesk at 500).
+ */
+@layer components {
+  .t-hero {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: clamp(44px, 6.6vw, 104px);
+    line-height: 0.94;
+    letter-spacing: -0.045em;
+  }
+  .t-h2 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: clamp(36px, 4.4vw, 64px);
+    line-height: 0.98;
+    letter-spacing: -0.035em;
+  }
+  .t-h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: clamp(26px, 2.5vw, 38px);
+    line-height: 1.04;
+    letter-spacing: -0.028em;
+  }
+  .t-num {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: clamp(96px, 13vw, 200px);
+    line-height: 0.8;
+    letter-spacing: -0.06em;
+    font-variant-numeric: tabular-nums;
+  }
+  .t-list {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: clamp(24px, 2.3vw, 34px);
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+  }
+  .t-lead {
+    font-size: clamp(15px, 1.15vw, 17px);
+    line-height: 1.55;
+    color: var(--mute);
+  }
+  .t-body {
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--mute);
+  }
+  .t-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.4;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--mute);
+  }
+  .t-code {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.75;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+  .page-x {
+    padding-inline: clamp(20px, 2.4vw, 36px);
+  }
+  /* product panel chrome */
+  .panel {
+    background: var(--s1);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+.caret {
+  animation: blink 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+}
