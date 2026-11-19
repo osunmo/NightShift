@@ -2,7 +2,7 @@
 
 A self-hosted background coding agent. Give it a bug or a small feature, compare the approaches it tries in parallel, and come back to a reviewed pull request.
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Settings](#settings) · [Architecture and deployment](docs/architecture.md)
+[Live homepage](https://nightshift-showcase-osunmo-3bf53f3c4201.herokuapp.com/) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Settings](#settings) · [Architecture and deployment](docs/architecture.md)
 
 ![Nightshift homepage with its project overview and animated run preview](docs/images/nightshift-home.png)
 
